@@ -1,0 +1,17 @@
+{
+    "name": "ash",
+    "editorIds": [
+        "AshMaterial*",
+        "DLC2AshMaterial*",
+        "AshLODMaterial*"
+    ],
+    "excludeEditorIds": [],
+    "pbr": false,
+    "patchMaterial": true,
+    "diffuseTexture": "textures/dlc02/landscape/volcanic_ash_01.dds",
+    "normalTexture": "textures/dlc02/landscape/volcanic_ash_01_n.dds",
+    "isSnow": false,
+    "neutralizeVertexColors": true,
+    "roofShelter": true,
+    "shelterFade": 96
+}

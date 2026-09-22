@@ -1,0 +1,15 @@
+{
+    "name": "snow",
+    "editorIds": [
+        "*snow*"
+    ],
+    "excludeEditorIds": [],
+    "pbr": true,
+    "patchMaterial": true,
+    "diffuseTexture": "textures/pbr/landscape/snow01.dds",
+    "normalTexture": "textures/pbr/landscape/snow01_n.dds",
+    "isSnow": true,
+    "neutralizeVertexColors": true,
+    "roofShelter": true,
+    "shelterFade": 96
+}

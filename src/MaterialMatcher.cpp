@@ -1,0 +1,328 @@
+#include "MaterialMatcher.hpp"
+
+#include "ConfigLoader.hpp"
+#include "EditorIdLookup.hpp"
+#include "MaterialClassifier.hpp"
+#include "PbrMaterialObjects.hpp"
+#include "ProjectedGeometry.hpp"
+#include "ProjectedTextures.hpp"
+#include "SeasonsOfSkyrim.hpp"
+#include "TextureColor.hpp"
+
+#include "PCH.h"
+
+#include <spdlog/spdlog.h>
+
+#include <cstddef>
+#include <format>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+using namespace XPMF;
+
+namespace {
+
+/**
+ * @brief "EditorID [FormID, last plugin to touch it]" for the log
+ */
+auto describeForm(const RE::TESForm& form,
+                  std::string_view editorId) -> std::string
+{
+    const auto* const file = form.GetFile();
+    return std::format("{} [{:08X} {}]",
+                       editorId.empty() ? "(no EditorID)" : editorId,
+                       form.GetFormID(),
+                       file != nullptr ? file->GetFilename() : "?");
+}
+
+} // namespace
+
+void MaterialMatcher::onDataLoaded()
+{
+    if (!ConfigLoader::isAnyMaterialPatched() && !ConfigLoader::isAnyGeometryChanged()) {
+        spdlog::info("No profile has patchMaterial, neutralizeVertexColors or roofShelter on: nothing to do");
+        return;
+    }
+    if (!EditorIdLookup::isAvailable()) {
+        spdlog::error("po3's Tweaks (po3_Tweaks.dll) is not loaded. It is required - its EditorID cache is how "
+                      "material objects are told apart - so nothing was changed");
+        return;
+    }
+
+    auto* const dataHandler = RE::TESDataHandler::GetSingleton();
+    if (dataHandler == nullptr) {
+        spdlog::error("No data handler at kDataLoaded; nothing was changed");
+        return;
+    }
+
+    // Material objects Community Shaders' True PBR has a configuration for are not this plugin's
+    PbrMaterialObjects::load();
+
+    // How many statics carry each material: for the log only, so a report shows at a glance what
+    // a verdict below is worth
+    std::unordered_map<const RE::BGSMaterialObject*, std::size_t> usage;
+    for (const auto* const stat : dataHandler->GetFormArray<RE::TESObjectSTAT>()) {
+        if (stat != nullptr && stat->data.materialObj != nullptr) {
+            ++usage[stat->data.materialObj];
+        }
+    }
+
+    // Verdicts first: without a single material to work on there is no reason to load textures
+    struct Candidate {
+        RE::BGSMaterialObject* material {};
+        std::string editorId;
+        bool pbr {}; /**< True PBR has a configuration for it */
+    };
+    std::unordered_map<const ConfigLoader::Profile*, std::vector<Candidate>> byProfile;
+    std::size_t named = 0;
+    std::size_t total = 0;
+    const RE::BGSMaterialObject* winterSnow = nullptr;
+    for (auto* const material : dataHandler->GetFormArray<RE::BGSMaterialObject>()) {
+        if (material == nullptr) {
+            continue;
+        }
+        ++total;
+
+        auto verdict = MaterialClassifier::classify(*material);
+        if (!verdict.editorId.empty()) {
+            ++named;
+        }
+        // Seasons of Skyrim projects this one's values onto clones by itself, which no static's
+        // material says; ProjectedGeometry has to know which record that is
+        if (SeasonsOfSkyrim::isSinglePassMaterial(verdict.editorId)) {
+            winterSnow = material;
+        }
+        spdlog::info("{}: {}, {} statics - {} ({}{}){}",
+                     describeForm(*material, verdict.editorId),
+                     MaterialClassifier::isSinglePass(*material) ? "single pass" : "multipass",
+                     usage[material],
+                     verdict.profile != nullptr ? std::format("profile '{}'", verdict.profile->name) : "no profile",
+                     MaterialClassifier::describe(verdict.reason),
+                     verdict.pattern.empty() ? "" : " " + verdict.pattern,
+                     verdict.pbr ? " [True PBR configuration]" : "");
+        if (verdict.profile != nullptr) {
+            byProfile[verdict.profile].push_back(
+                {.material = material, .editorId = std::move(verdict.editorId), .pbr = verdict.pbr});
+        }
+    }
+
+    if (total > 0 && named == 0) {
+        spdlog::error("None of the {} material objects has an EditorID on record, so \"Load EditorIDs\" "
+                      "(bLoadEditorIDs under [Fixes] in po3_Tweaks.ini) must be off. Turn it back on; nothing was "
+                      "changed",
+                      total);
+        return;
+    }
+    if (byProfile.empty()) {
+        spdlog::warn("None of the {} material objects belongs to a profile; nothing was changed", total);
+        return;
+    }
+
+    // The game's own coverage noise is what every material without a noise of its own is drawn with.
+    // Only roof shelter cares what it averages
+    const bool shelter = ConfigLoader::isAnyRoofSheltered();
+    const float gameNoise = shelter ? meanNoise({}) : VANILLA_MEAN_NOISE;
+
+    ProjectedGeometry::Materials materials;
+    for (const auto& profile : ConfigLoader::getProfiles()) {
+        const auto found = byProfile.find(&profile);
+        if (found == byProfile.end()) {
+            spdlog::info("Profile '{}': no material object matches it", profile.name);
+            continue;
+        }
+
+        // Whose material is it? A multipass one is nobody's: nothing about it is projected. One
+        // with a True PBR configuration stays exactly as its author left it unless the profile is
+        // for PBR materials only (its textures are PBR ones then, and PBR's shader takes the color
+        // and the projected textures like vanilla's does), as does every one of a profile that
+        // patches nothing - but the shapes under either still carry a projection, which is what
+        // the vertex color and roof shelter parts work on.
+        std::vector<const Candidate*> ours;
+        std::vector<const Candidate*> untouched;
+        std::size_t leftMultipass = 0;
+        std::size_t leftPbr = 0;
+        for (const auto& candidate : found->second) {
+            if (!MaterialClassifier::isSinglePass(*candidate.material)) {
+                ++leftMultipass;
+                continue;
+            }
+            const bool handsOff = candidate.pbr && !profile.pbr;
+            if (profile.patchMaterial && handsOff) {
+                ++leftPbr;
+                spdlog::info("{}: has a True PBR configuration and profile '{}' is not for PBR materials, so the "
+                             "record is left untouched; its shapes still get the profile's vertex colors and roof "
+                             "shelter",
+                             describeForm(*candidate.material, candidate.editorId),
+                             profile.name);
+            }
+            (profile.patchMaterial && !handsOff ? ours : untouched).push_back(&candidate);
+        }
+
+        // Without a material to patch there is no texture to load either
+        std::optional<Match> match;
+        if (!ours.empty()) {
+            match = matchTextures(profile);
+            if (!match.has_value()) {
+                spdlog::error("Profile '{}': its {} material objects stay as they are", profile.name, ours.size());
+                untouched.insert(untouched.end(), ours.begin(), ours.end());
+                ours.clear();
+            }
+        }
+        // Where a snow line lies under a roof depends on the average of the noise its draws sample
+        const float ownNoise
+            = profile.roofShelter && match.has_value() && match->ownNoise ? meanNoise(profile.noiseTexture) : gameNoise;
+
+        std::size_t statics = 0;
+        for (const auto* const candidate : ours) {
+            auto* const material = candidate->material;
+            auto& data = material->directionalData;
+            using Flag = RE::BSMaterialObject::DIRECTIONAL_DATA::Flag;
+            const bool isSnow = profile.isSnow.value_or(data.flags.any(Flag::kSnow));
+
+            // The color: the profile's where its diffuse supplies the look, the record's own
+            // where the game's diffuse stays - tagged either way when there is a set of textures
+            // to name (see ProjectedTextures). Scale, bias and noise scale stay the material's
+            // own, which keeps its coverage what it was.
+            const RE::NiColor before = data.singlePassColor;
+            RE::NiColor color = match->color.value_or(before);
+            if (match->set.has_value()) {
+                color = ProjectedTextures::tag(*match->set, color);
+            }
+            spdlog::info("{}: ({:.4f}, {:.4f}, {:.4f}) -> {}, snow {}",
+                         describeForm(*material, candidate->editorId),
+                         before.red,
+                         before.green,
+                         before.blue,
+                         match->color.has_value() ? "the profile's color" : "its own color, tagged",
+                         isSnow ? "on" : "off");
+            data.singlePassColor = color;
+            data.flags = isSnow ? Flag::kSnow : Flag::kNone;
+
+            materials.emplace(material, ProjectedGeometry::Treatment {.profile = &profile, .meanNoise = ownNoise});
+            statics += usage[material];
+        }
+        for (const auto* const candidate : untouched) {
+            materials.emplace(
+                candidate->material,
+                ProjectedGeometry::Treatment {.profile = &profile, .meanNoise = gameNoise, .untouched = true});
+        }
+
+        spdlog::info("Profile '{}': patched {} material objects used by {} statics (diffuse {}); {} single pass left "
+                     "as they are ({} of them for having a True PBR configuration), {} multipass ignored",
+                     profile.name,
+                     ours.size(),
+                     statics,
+                     profile.diffuseTexture.empty() ? "not replaced" : profile.diffuseTexture.c_str(),
+                     untouched.size(),
+                     leftPbr,
+                     leftMultipass);
+    }
+
+    // Everything above changed what a projection looks like; this changes which vertices it looks
+    // like that on (vertex colors and roof shelter, see ProjectedGeometry)
+    ProjectedTextures::activate();
+    ProjectedGeometry::onMaterialsReady(std::move(materials), winterSnow);
+}
+
+auto MaterialMatcher::matchTextures(const ConfigLoader::Profile& profile) -> std::optional<Match>
+{
+    const RE::NiColor white {1.0F, 1.0F, 1.0F};
+    const bool replacesDiffuse = !profile.diffuseTexture.empty();
+    const bool sampled = isProjectedDiffuseEnabled();
+    const auto logged = [&](const Match& match) -> void {
+        if (match.color.has_value()) {
+            spdlog::info("Profile '{}': single pass color ({:.4f}, {:.4f}, {:.4f}){}",
+                         profile.name,
+                         match.color->red,
+                         match.color->green,
+                         match.color->blue,
+                         match.set.has_value() ? ", tagged" : "");
+        } else {
+            spdlog::info("Profile '{}': its materials keep their own single pass colors{}",
+                         profile.name,
+                         match.set.has_value() ? ", tagged" : "");
+        }
+    };
+
+    // The textures themselves, through a color that says whose draw it is: white where the
+    // profile's diffuse supplies the look, the record's own where the game's diffuse stays
+    if (const auto added = ProjectedTextures::add({.diffuse = profile.diffuseTexture,
+                                                   .normal = profile.normalTexture,
+                                                   .noise = profile.noiseTexture,
+                                                   .detailNormal = profile.detailNormalTexture,
+                                                   .pbr = profile.pbr});
+        added.has_value()) {
+        Match match {.set = added->set, .ownNoise = added->ownNoise};
+        if (replacesDiffuse && sampled) {
+            match.color = white;
+        } else if (replacesDiffuse) {
+            // The shader samples no diffuse with the setting off, so the color has to carry the
+            // texture: its average
+            const auto mean = TextureColor::meanColor(profile.diffuseTexture);
+            if (!mean.has_value()) {
+                spdlog::error(
+                    "Profile '{}': without {} there is nothing to match", profile.name, profile.diffuseTexture);
+                return std::nullopt;
+            }
+            spdlog::info("Profile '{}': {} is off, so the shader samples no projected diffuse and its materials get "
+                         "the texture's average; its normal map cannot apply",
+                         profile.name,
+                         PROJECTED_DIFFUSE_SETTING);
+            match.color = mean;
+        }
+        logged(match);
+        return match;
+    }
+    if (!replacesDiffuse) {
+        return std::nullopt; // no room for another set: nothing can be done for the profile
+    }
+
+    // The diffuse did not load as a renderer texture. From here on the color has to carry it,
+    // which leaves nothing to tag: the profile's draws cannot be told apart, and its other
+    // textures stay the game's
+    const auto mean = TextureColor::meanColor(profile.diffuseTexture);
+    if (!mean.has_value()) {
+        spdlog::error("Profile '{}': without {} there is nothing to match", profile.name, profile.diffuseTexture);
+        return std::nullopt;
+    }
+    Match match {.color = *mean};
+    if (!sampled) {
+        // used as is
+    } else if (const auto game = TextureColor::meanColor(PROJECTED_DIFFUSE); game.has_value()) {
+        // Per channel ratio of the two averages; a channel the divisor has next to nothing in is
+        // left alone. No upper clamp: a dark ProjectedDiffuse legitimately needs a color above 1
+        // to land on the texture, and the product is what ends up on screen
+        const auto divide = [](float channel, float by) -> float { return by >= MIN_DIVISOR ? channel / by : channel; };
+        match.color = RE::NiColor {
+            divide(mean->red, game->red), divide(mean->green, game->green), divide(mean->blue, game->blue)};
+        spdlog::warn(
+            "Profile '{}': falling back to a color matched through the game's {}", profile.name, PROJECTED_DIFFUSE);
+    } else {
+        spdlog::warn("Profile '{}': neither texture could be used; its materials get the texture's average "
+                     "uncompensated",
+                     profile.name);
+    }
+    logged(match);
+    return match;
+}
+
+auto MaterialMatcher::meanNoise(const std::string& dataPath) -> float
+{
+    const auto mean = TextureColor::meanColor(dataPath.empty() ? PROJECTED_NOISE : dataPath);
+    if (!mean.has_value()) {
+        spdlog::warn("...so roof shelter assumes the vanilla noise's average, {}", VANILLA_MEAN_NOISE);
+        return VANILLA_MEAN_NOISE;
+    }
+    spdlog::info("Coverage noise {} averages {:.3f}", dataPath.empty() ? PROJECTED_NOISE : dataPath.c_str(), mean->red);
+    return mean->red;
+}
+
+auto MaterialMatcher::isProjectedDiffuseEnabled() -> bool
+{
+    const auto* const setting = RE::GetINISetting(PROJECTED_DIFFUSE_SETTING);
+    return setting == nullptr || setting->GetBool();
+}
