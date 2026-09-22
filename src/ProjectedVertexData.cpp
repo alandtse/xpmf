@@ -22,7 +22,13 @@ using namespace XPMF;
 
 namespace {
 
-constexpr std::uint8_t FULL = 255; /**< White, or fully opaque (OPAQUE itself is a wingdi.h macro) */
+/**
+ * @brief One random 64 bit word per flag of a SharedKey, so keys differing in one flag never collide
+ */
+constexpr std::array<std::uint64_t, 4> KEY_SALTS {0x517CC1B727220A95ULL,
+                                                  0x2545F4914F6CDD1DULL,
+                                                  0x9E3779B97F4A7C15ULL,
+                                                  0xD6E8FEB86659FD93ULL};
 
 /**
  * @brief FNV-1a over a byte range, continuing from a previous hash
@@ -67,7 +73,6 @@ auto ProjectedVertexData::shared(const Shape& shape) -> Data*
     Recipe recipe;
     recipe.whiten = !shape.colorsEnabled || shape.neutralize;
     recipe.keepAlpha = !shelter;
-    recipe.alphaAll = FULL;
 
     Data* const variant = build(shape, recipe);
     if (variant == nullptr) {
@@ -236,8 +241,8 @@ void ProjectedVertexData::collectGarbage()
 auto ProjectedVertexData::SharedKeyHash::operator()(const SharedKey& key) const noexcept -> std::size_t
 {
     const std::size_t pointer = std::hash<const Data*> {}(key.source);
-    return pointer ^ (key.colorsEnabled ? 0x517CC1B727220A95ULL : 0) ^ (key.keepAlpha ? 0x2545F4914F6CDD1DULL : 0)
-        ^ (key.neutralize ? 0x9E3779B97F4A7C15ULL : 0) ^ (key.shelter ? 0xD6E8FEB86659FD93ULL : 0);
+    return pointer ^ (key.colorsEnabled ? KEY_SALTS[0] : 0) ^ (key.keepAlpha ? KEY_SALTS[1] : 0)
+        ^ (key.neutralize ? KEY_SALTS[2] : 0) ^ (key.shelter ? KEY_SALTS[3] : 0);
 }
 
 auto ProjectedVertexData::build(const Shape& shape,
@@ -267,17 +272,18 @@ auto ProjectedVertexData::build(const Shape& shape,
 
         const auto color = to.subspan(layout->colorOffset, VertexLayout::COLOR_SIZE);
         if (!sourceLayout->hasColors) {
-            std::ranges::fill(color, FULL);
+            std::ranges::fill(color, VertexLayout::COLOR_MAX);
         }
         const std::array<std::uint8_t, VertexLayout::COLOR_SIZE> before {color[0], color[1], color[2], color[3]};
 
+        constexpr std::size_t RGB = 3; /**< The color's channels before the alpha */
         if (recipe.whiten) {
-            std::ranges::fill(color.first(3), FULL);
+            std::ranges::fill(color.first(RGB), VertexLayout::COLOR_MAX);
         }
         if (!recipe.alpha.empty()) {
-            color[3] = recipe.alpha[index];
+            color[RGB] = recipe.alpha[index];
         } else if (!recipe.keepAlpha) {
-            color[3] = recipe.alphaAll;
+            color[RGB] = VertexLayout::COLOR_MAX;
         }
         changed = changed || !std::ranges::equal(before, color);
     }

@@ -10,14 +10,12 @@
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/spdlog.h>
 
-#include <cstddef>
 #include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>
 
 using namespace XPMF;
-using namespace std::literals;
 
 namespace {
 
@@ -37,7 +35,7 @@ void setupLog()
     auto fileLogger = std::make_shared<spdlog::sinks::basic_file_sink_mt>(logFilePath.string(), true);
     auto logger = std::make_shared<spdlog::logger>("log", std::move(fileLogger));
 
-    // Log everything and flush per message so crashes don't lose the tail of the log
+    // Log at info and above, and flush per message so crashes don't lose the tail of the log
     spdlog::set_default_logger(std::move(logger));
     spdlog::set_level(spdlog::level::info);
     spdlog::flush_on(spdlog::level::info);
@@ -49,9 +47,9 @@ void setupLog()
 // CommonLibSSE-NG / SKSE Exports
 //
 
-SKSEPluginInfo(.Version = REL::Version {0,
-                                        1,
-                                        0,
+SKSEPluginInfo(.Version = REL::Version {PLUGIN_VERSION_MAJOR,
+                                        PLUGIN_VERSION_MINOR,
+                                        PLUGIN_VERSION_PATCH,
                                         0},
                .Name = PLUGIN_NAME,
                .Author = "hakasapl",

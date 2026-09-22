@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -40,11 +42,6 @@ public:
     static void load();
 
     /**
-     * @brief Whether Community Shaders is loaded
-     */
-    [[nodiscard]] static auto isCommunityShadersLoaded() -> bool;
-
-    /**
      * @brief Whether True PBR has a configuration for a material object
      *
      * @param editorId The material's EditorID, as loaded
@@ -69,9 +66,9 @@ private:
         }
     };
 
-    static inline bool s_communityShaders = false;
     static inline std::unordered_set<std::string, Hash, std::equal_to<>> s_editorIds; /**< File names without
-                                                                                        their extension */
+                                                                                        their extension; empty
+                                                                                        without Community Shaders */
 };
 
 } // namespace XPMF

@@ -40,9 +40,9 @@ namespace XPMF {
  * number in blue (tag). Twelve bits of a 23 bit mantissa move a channel by less than one part in
  * two thousand - a fifth of an 8 bit step, invisible - and no arithmetic on colors produces the
  * signature (one chance in 2^24 for an untagged color). Whatever the color is: a material whose
- * profile replaces the diffuse gets white, the texture supplying the color, and one whose profile
- * leaves the diffuse alone keeps its own color and just carries the tag. No bookkeeping, no
- * lifetimes, LOD included.
+ * profile replaces the diffuse gets white (the texture supplies the color; its average, when the
+ * shader is set to sample none), and one whose profile leaves the diffuse alone keeps its own
+ * color and just carries the tag. No bookkeeping, no lifetimes, LOD included.
  *
  * Everything else - moss, another mod's materials, the material objects Community Shaders' True
  * PBR has a configuration for and no profile is written for - keeps sampling the game's textures,
@@ -77,6 +77,14 @@ public:
         std::string detailNormal;
         bool pbr {}; /**< The diffuse is a PBR base color: an sRGB format is projected as its non-sRGB counterpart */
         auto operator==(const Paths&) const -> bool = default;
+
+        /**
+         * @brief Whether no texture is named at all
+         */
+        [[nodiscard]] auto namesNothing() const -> bool
+        {
+            return diffuse.empty() && normal.empty() && noise.empty() && detailNormal.empty();
+        }
     };
 
     /**
@@ -110,8 +118,9 @@ public:
      * @brief A color marked as belonging to a set: what a material of the set's profile is given
      *
      * @param set From add()
-     * @param color The color to mark: white when the set replaces the diffuse, the material's own
-     *        otherwise. Each channel moves by less than one part in two thousand
+     * @param color The color to mark: white (or the texture's average) when the set replaces the
+     *        diffuse, the material's own otherwise. Each channel moves by less than one part in
+     *        two thousand
      */
     [[nodiscard]] static auto tag(std::size_t set,
                                   const RE::NiColor& color) -> RE::NiColor;
@@ -132,7 +141,7 @@ private:
                           RE::BSRenderPass* pass,
                           std::uint32_t renderFlags);
         static inline REL::Relocation<decltype(thunk)> s_func; /**< Whatever occupied the slot before */
-        constexpr static std::size_t SLOT = 0x6;
+        constexpr static std::size_t SLOT = 0x6; /**< BSShader::SetupGeometry(BSRenderPass*, uint32) */
     };
 
     /**
@@ -154,16 +163,16 @@ private:
 
     constexpr static std::uint32_t MARK_MASK = 0xFFFU; /**< The twelve lowest mantissa bits of red and green hold
                                                           the signature... */
-    constexpr static std::uint32_t RED_MARK = 0xA5CU;
+    constexpr static std::uint32_t RED_MARK = 0xA5CU; /**< ...two patterns no arithmetic on colors lands on... */
     constexpr static std::uint32_t GREEN_MARK = 0x35AU;
     constexpr static std::uint32_t SET_MASK = 0xFFU; /**< ...and the eight lowest of blue the set's number + 1 */
     constexpr static std::size_t MAX_SETS = 255; /**< What fits into that byte */
-    constexpr static std::size_t NOT_TAGGED = MAX_SETS;
+    constexpr static std::size_t NOT_TAGGED = MAX_SETS; /**< setOf()'s answer for a color without a tag */
 
     constexpr static std::uint32_t LIGHTING_TECHNIQUE_START = 0x4800002DU; /**< BSRenderPass::passEnum of
                                                                               lighting technique 0 */
     constexpr static std::uint32_t LIGHTING_TYPE_SHIFT = 24; /**< The technique's top bits are its type */
-    constexpr static std::uint32_t LIGHTING_TYPE_MASK = 0x3F;
+    constexpr static std::uint32_t LIGHTING_TYPE_MASK = 0x3F; /**< Six bits of it */
 
     /**
      * @brief The set a shape's projection color names, or NOT_TAGGED

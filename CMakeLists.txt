@@ -2,10 +2,6 @@ cmake_minimum_required(VERSION 3.21)
 
 set(VCPKG_TARGET_TRIPLET "x64-windows-static")
 
-if(POLICY CMP0091)
-    cmake_policy(SET CMP0091 NEW)
-endif()
-
 set(PLUGIN_NAME "XPMF")
 set(PLUGIN_DESCRIPTION "Extended Projected Materials Framework")
 set(PLUGIN_VERSION "0.1.0")
@@ -19,6 +15,9 @@ endif()
 add_compile_definitions(PLUGIN_NAME="${PLUGIN_NAME}")
 add_compile_definitions(PLUGIN_DESCRIPTION="${PLUGIN_DESCRIPTION}")
 add_compile_definitions(PLUGIN_VERSION="${PLUGIN_VERSION}")
+add_compile_definitions(PLUGIN_VERSION_MAJOR=${PROJECT_VERSION_MAJOR})
+add_compile_definitions(PLUGIN_VERSION_MINOR=${PROJECT_VERSION_MINOR})
+add_compile_definitions(PLUGIN_VERSION_PATCH=${PROJECT_VERSION_PATCH})
 
 # CommonLibSSE-NG resolves game addresses and struct layouts at runtime, so one DLL serves
 # every supported runtime. SE and AE are both enabled - AE here covers the 1.7.x releases
@@ -31,7 +30,8 @@ set(ENABLE_SKYRIM_AE ON CACHE BOOL "" FORCE)
 set(ENABLE_SKYRIM_VR OFF CACHE BOOL "" FORCE)
 add_subdirectory("extern/CommonLibSSE-NG" commonlibsse)
 
-# DirectXTex decodes the (usually block compressed) DDS the generated material is matched to
+# DirectXTex reads DDS files: to average a texture for a fallback color, and to re-upload a PBR
+# base color in its non-sRGB format
 find_package(directxtex CONFIG REQUIRED)
 
 # The configuration is a list of profiles, each holding lists: JSON
@@ -50,6 +50,7 @@ set(headers
     "include/ProjectedVertexData.hpp"
     "include/SeasonsOfSkyrim.hpp"
     "include/ShelterMap.hpp"
+    "include/Text.hpp"
     "include/TextureColor.hpp"
     "include/VertexLayout.hpp"
 )

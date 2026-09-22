@@ -2,6 +2,8 @@
 
 #include "PCH.h"
 
+#include <DirectXTex.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -11,7 +13,7 @@
 namespace XPMF {
 
 /**
- * @brief Computes the average color of a texture as a shader would sample it
+ * @brief Reads textures through the game's resource system, and averages them as a shader would sample them
  *
  * The file is read through the game's own resource system, so it is found wherever the game
  * would find it - a loose file, a BSA, or a mod manager's virtual file system - and the
@@ -30,12 +32,30 @@ public:
     /**
      * @brief Averages the RGB channels of a DDS texture
      *
-     * @param dataPath Path relative to Data, e.g. textures\landscape\snow01landscape.dds
+     * @param dataPath Path relative to Data, e.g. textures\landscape\snow01.dds
      * @return std::optional<RE::NiColor> The mean color, or std::nullopt (after logging why)
      *         when the file is missing or cannot be decoded
      */
     [[nodiscard]] static auto meanColor(const std::string& dataPath) -> std::optional<RE::NiColor>;
 
+    /**
+     * @brief A DDS file as DirectXTex holds it: what the file says about itself, and its images
+     */
+    struct Dds {
+        DirectX::TexMetadata metadata {};
+        DirectX::ScratchImage image;
+    };
+
+    /**
+     * @brief Reads and parses a DDS through BSResource
+     *
+     * @param dataPath Path relative to Data
+     * @return std::optional<Dds> std::nullopt, after a warning saying why, when the file is not
+     *         there or not a DDS DirectXTex can read
+     */
+    [[nodiscard]] static auto loadDds(const std::string& dataPath) -> std::optional<Dds>;
+
+private:
     /**
      * @brief Reads a whole file through BSResource
      *
@@ -44,7 +64,6 @@ public:
      */
     [[nodiscard]] static auto readResource(const std::string& dataPath) -> std::vector<std::uint8_t>;
 
-private:
     constexpr static std::size_t MAX_TEXELS = std::size_t {2048} * 2048; /**< Largest mip worth decoding. A mip is a
                                                                             box filter of the one above, which
                                                                             keeps the mean to within the block

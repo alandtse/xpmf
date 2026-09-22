@@ -35,7 +35,7 @@ auto ProjectedTextures::add(const Paths& paths) -> std::optional<Added>
         spdlog::error("Projected textures were asked for after the draw hook went live; nothing was loaded");
         return std::nullopt; // the sets must not change under a running hook
     }
-    if (paths == Paths {}) {
+    if (paths.namesNothing()) {
         return Added {}; // the game's textures throughout: nothing to tell draws apart for
     }
     for (std::size_t set = 0; set < s_count; ++set) {
@@ -43,8 +43,15 @@ auto ProjectedTextures::add(const Paths& paths) -> std::optional<Added>
             return Added {.set = set, .ownNoise = s_sets.at(set).noise != nullptr};
         }
     }
+    const auto orNone = [](const std::string& path) -> const char* { return path.empty() ? "(none)" : path.c_str(); };
     if (s_count >= MAX_SETS) {
-        spdlog::error("More than {} different sets of projected textures; {} gets none", MAX_SETS, paths.diffuse);
+        spdlog::error("More than {} different sets of projected textures; the set of diffuse {}, normal {}, noise {}, "
+                      "detail normal {} gets none",
+                      MAX_SETS,
+                      orNone(paths.diffuse),
+                      orNone(paths.normal),
+                      orNone(paths.noise),
+                      orNone(paths.detailNormal));
         return std::nullopt;
     }
 
@@ -55,7 +62,7 @@ auto ProjectedTextures::add(const Paths& paths) -> std::optional<Added>
             return std::nullopt;
         }
     }
-    const auto optional = [](const std::string& path, const char* what) -> TexturePointer* {
+    const auto holdOrKeep = [](const std::string& path, const char* what) -> TexturePointer* {
         if (path.empty()) {
             return nullptr;
         }
@@ -65,9 +72,9 @@ auto ProjectedTextures::add(const Paths& paths) -> std::optional<Added>
         }
         return holder;
     };
-    fresh.normal = optional(paths.normal, "normal");
-    fresh.noise = optional(paths.noise, "noise");
-    fresh.detailNormal = optional(paths.detailNormal, "detail normal");
+    fresh.normal = holdOrKeep(paths.normal, "normal");
+    fresh.noise = holdOrKeep(paths.noise, "noise");
+    fresh.detailNormal = holdOrKeep(paths.detailNormal, "detail normal");
     if (fresh.diffuse == nullptr && fresh.normal == nullptr && fresh.noise == nullptr
         && fresh.detailNormal == nullptr) {
         return Added {}; // nothing loaded that would be swapped in
@@ -135,14 +142,13 @@ auto ProjectedTextures::holdForPbr(const std::string& dataPath) -> TexturePointe
         return nullptr;
     }
 
-    const auto bytes = TextureColor::readResource(dataPath);
-    DirectX::TexMetadata metadata {};
-    DirectX::ScratchImage image;
-    if (bytes.empty()
-        || FAILED(DirectX::LoadFromDDSMemory(bytes.data(), bytes.size(), DirectX::DDS_FLAGS_NONE, &metadata, image))) {
-        spdlog::warn("{} could not be read back as a DDS; it is projected as the engine loaded it", dataPath);
+    const auto dds = TextureColor::loadDds(dataPath);
+    if (!dds.has_value()) {
+        spdlog::warn("...so it is projected as the engine loaded it");
         return original;
     }
+    const DirectX::TexMetadata& metadata = dds->metadata;
+    const DirectX::ScratchImage& image = dds->image;
     if (!DirectX::IsSRGB(metadata.format)) {
         spdlog::warn("{} is not in an sRGB format (DXGI format {}), which Community Shaders' PBR expects of a base "
                      "color; it is projected as it is, and may not match the landscape",

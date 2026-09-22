@@ -95,7 +95,7 @@ $Toolchain = Resolve-VcpkgToolchain
 Write-Step "Using vcpkg toolchain: $Toolchain"
 
 # --- Configure, build and stage ----------------------------------------------
-$distDir = Join-Path $DistRoot "SKSE\plugins"
+$distDir = Join-Path $DistRoot "SKSE\Plugins"
 New-Item -ItemType Directory -Path $distDir -Force | Out-Null
 
 Write-Step "Configuring"

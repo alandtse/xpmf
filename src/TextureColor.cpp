@@ -18,22 +18,12 @@ using namespace XPMF;
 
 auto TextureColor::meanColor(const std::string& dataPath) -> std::optional<RE::NiColor>
 {
-    const auto bytes = readResource(dataPath);
-    if (bytes.empty()) {
-        spdlog::error("Texture {} was not found (loose or in any archive)", dataPath);
+    const auto dds = loadDds(dataPath);
+    if (!dds.has_value()) {
         return std::nullopt;
     }
-
-    DirectX::TexMetadata metadata {};
-    DirectX::ScratchImage texture;
-    HRESULT result
-        = DirectX::LoadFromDDSMemory(bytes.data(), bytes.size(), DirectX::DDS_FLAGS_NONE, &metadata, texture);
-    if (FAILED(result)) {
-        spdlog::error("Texture {} is not a DDS this plugin can read (HRESULT {:#010x})",
-                      dataPath,
-                      static_cast<std::uint32_t>(result));
-        return std::nullopt;
-    }
+    const DirectX::TexMetadata& metadata = dds->metadata;
+    const DirectX::ScratchImage& texture = dds->image;
 
     // Largest mip within the texel budget; a texture without mips is measured at full size
     std::size_t mip = 0;
@@ -49,7 +39,7 @@ auto TextureColor::meanColor(const std::string& dataPath) -> std::optional<RE::N
     // Block compressed formats (nearly every game texture) have to be unpacked first
     DirectX::ScratchImage unpacked;
     if (DirectX::IsCompressed(image->format)) {
-        result = DirectX::Decompress(*image, DXGI_FORMAT_UNKNOWN, unpacked);
+        const HRESULT result = DirectX::Decompress(*image, DXGI_FORMAT_UNKNOWN, unpacked);
         if (FAILED(result)) {
             spdlog::error("Texture {} could not be decompressed (format {}, HRESULT {:#010x})",
                           dataPath,
@@ -65,7 +55,7 @@ auto TextureColor::meanColor(const std::string& dataPath) -> std::optional<RE::N
 
     std::array<double, 3> sum {};
     std::size_t texels = 0;
-    result = DirectX::EvaluateImage(
+    const HRESULT result = DirectX::EvaluateImage(
         *image, [&](const DirectX::XMVECTOR* pixels, std::size_t width, std::size_t /*row*/) -> void {
             for (const DirectX::XMVECTOR& stored : std::span {pixels, width}) {
                 const DirectX::XMVECTOR pixel = linearize ? DirectX::XMColorSRGBToRGB(stored) : stored;
@@ -97,6 +87,25 @@ auto TextureColor::meanColor(const std::string& dataPath) -> std::optional<RE::N
                  mean.green,
                  mean.blue);
     return mean;
+}
+
+auto TextureColor::loadDds(const std::string& dataPath) -> std::optional<Dds>
+{
+    const auto bytes = readResource(dataPath);
+    if (bytes.empty()) {
+        spdlog::warn("Texture {} was not found (loose or in any archive)", dataPath);
+        return std::nullopt;
+    }
+    Dds dds;
+    const HRESULT result
+        = DirectX::LoadFromDDSMemory(bytes.data(), bytes.size(), DirectX::DDS_FLAGS_NONE, &dds.metadata, dds.image);
+    if (FAILED(result)) {
+        spdlog::warn("Texture {} is not a DDS this plugin can read (HRESULT {:#010x})",
+                     dataPath,
+                     static_cast<std::uint32_t>(result));
+        return std::nullopt;
+    }
+    return dds;
 }
 
 auto TextureColor::readResource(const std::string& dataPath) -> std::vector<std::uint8_t>

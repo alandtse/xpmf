@@ -62,6 +62,53 @@ auto skyCellOf(const RE::TESWorldSpace* world) -> RE::TESObjectCELL*
     return world != nullptr ? world->skyCell : nullptr;
 }
 
+/**
+ * @brief Whether a material was ever projected onto a shape
+ *
+ * Clone3D (and Seasons of Skyrim) write the material's color with an alpha of 1 next to setting
+ * Projected_UV; a shape this plugin switched off keeps the color, so the alpha says so for good.
+ */
+auto wasProjectedOnto(const RE::BSLightingShaderProperty& shader) -> bool
+{
+    constexpr float PROJECTED_ALPHA = 1.0F;
+    return shader.projectedUVColor.alpha == PROJECTED_ALPHA;
+}
+
+/**
+ * @brief Calls visit on every leaf object under a root, depth first, looking at no more than
+ * budget objects
+ *
+ * @param skipCulled Whether app-culled subtrees are left out (hidden states render nothing)
+ */
+template <typename Visit>
+void forEachLeaf(RE::NiAVObject& root,
+                 std::size_t budget,
+                 bool skipCulled,
+                 Visit&& visit)
+{
+    static thread_local std::vector<RE::NiAVObject*> stack;
+    stack.clear();
+    stack.push_back(&root);
+    std::size_t visited = 0;
+    while (!stack.empty() && visited < budget) {
+        auto* const object = stack.back();
+        stack.pop_back();
+        ++visited;
+        if (skipCulled && object->GetAppCulled()) {
+            continue;
+        }
+        if (auto* const node = object->AsNode(); node != nullptr) {
+            for (const auto& child : node->GetChildren()) {
+                if (child != nullptr) {
+                    stack.push_back(child.get());
+                }
+            }
+            continue;
+        }
+        visit(*object);
+    }
+}
+
 } // namespace
 
 //
@@ -79,7 +126,7 @@ auto ProjectedGeometry::isWanted() -> bool
 void ProjectedGeometry::install()
 {
     if (!isWanted()) {
-        spdlog::info("Vertex color handling is off (no profile has neutralizeVertexColors or roofShelter on)");
+        spdlog::info("Nothing for the Clone3D hooks to do (no profile has neutralizeVertexColors or roofShelter on)");
         return;
     }
 
@@ -201,8 +248,7 @@ auto ProjectedGeometry::Clone3DHook::thunk(RE::TESBoundObject* base,
         const auto* const cell = ref->GetParentCell();
         if (cell == nullptr || !cell->IsInteriorCell()) {
             const auto position = ref->GetPosition();
-            const CellKey key = keyOf(static_cast<int>(std::floor(position.x / ShelterMap::K_CELL_SIZE)),
-                                      static_cast<int>(std::floor(position.y / ShelterMap::K_CELL_SIZE)));
+            const CellKey key = keyOf(ShelterMap::cellOf(position.x), ShelterMap::cellOf(position.y));
             const std::scoped_lock lock(s_queueMutex);
             if (s_touched.empty() || s_touched.back() != key) {
                 s_touched.push_back(key);
@@ -248,65 +294,28 @@ void ProjectedGeometry::adoptWinterSnow(RE::NiAVObject& root)
     // property at every draw, so writing it is all it takes - to every shape the snow was ever
     // projected onto (alpha 1, see collectReference), one this plugin switched off included.
     const RE::NiColor& color = material->directionalData.singlePassColor;
-    static thread_local std::vector<RE::NiAVObject*> stack;
-    stack.clear();
-    stack.push_back(&root);
-    std::size_t visited = 0;
-    while (!stack.empty() && visited < K_MAX_NODES_PER_REF) {
-        auto* const object = stack.back();
-        stack.pop_back();
-        ++visited;
-        if (object == nullptr) {
-            continue;
-        }
-        if (auto* const node = object->AsNode(); node != nullptr) {
-            for (const auto& child : node->GetChildren()) {
-                if (child != nullptr) {
-                    stack.push_back(child.get());
-                }
-            }
-            continue;
-        }
-        auto* const geometry = object->AsGeometry();
+    forEachLeaf(root, K_MAX_NODES_PER_REF, false, [&](RE::NiAVObject& object) -> void {
+        auto* const geometry = object.AsGeometry();
         auto* const shader = geometry != nullptr
             ? netimmerse_cast<RE::BSLightingShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get())
             : nullptr;
-        if (shader != nullptr && shader->projectedUVColor.alpha == 1.0F) {
+        if (shader != nullptr && wasProjectedOnto(*shader)) {
             shader->projectedUVColor.red = color.red;
             shader->projectedUVColor.green = color.green;
             shader->projectedUVColor.blue = color.blue;
         }
-    }
+    });
 }
 
 void ProjectedGeometry::dressClone(RE::NiAVObject& root,
                                    const Treatment& treatment)
 {
-    static thread_local std::vector<RE::NiAVObject*> stack;
-    stack.clear();
-    stack.push_back(&root);
-    std::size_t visited = 0;
-    while (!stack.empty() && visited < K_MAX_NODES_PER_REF) {
-        auto* const object = stack.back();
-        stack.pop_back();
-        ++visited;
-        if (object == nullptr) {
-            continue;
-        }
-        if (auto* const node = object->AsNode(); node != nullptr) {
-            for (const auto& child : node->GetChildren()) {
-                if (child != nullptr) {
-                    stack.push_back(child.get());
-                }
-            }
-            continue;
-        }
-
+    forEachLeaf(root, K_MAX_NODES_PER_REF, false, [&](RE::NiAVObject& object) -> void {
         // Only shapes the engine just put projected snow on, and only ones that show their
         // colors: enabling colors on the rest waits for the cell pass, which knows the alpha
-        const auto shape = view(*object);
+        const auto shape = view(object);
         if (!shape.has_value() || !shape->shader->flags.all(ShaderFlag::kProjectedUV, ShaderFlag::kVertexColors)) {
-            continue;
+            return;
         }
         const ProjectedVertexData::Shape description {.source = ProjectedVertexData::sourceOf(shape->data),
                                                       .vertexCount = shape->vertexCount,
@@ -318,7 +327,7 @@ void ProjectedGeometry::dressClone(RE::NiAVObject& root,
         if (auto* const variant = ProjectedVertexData::shared(description); variant != nullptr) {
             ProjectedVertexData::install(*shape->shape, variant);
         }
-    }
+    });
 }
 
 auto ProjectedGeometry::view(RE::NiAVObject& object) -> std::optional<ShapeView>
@@ -399,11 +408,10 @@ auto ProjectedGeometry::paintsAlpha(const Data& source,
     if (!layout.has_value() || !layout->hasColors || source.rawVertexData == nullptr) {
         return false; // no color at all is alpha 1 everywhere to the shader
     }
-    constexpr std::uint8_t FULL = 255;
-    constexpr std::uint32_t ALPHA = 3;
+    constexpr std::uint32_t ALPHA = 3; /**< Byte of the alpha within a color */
     const std::uint8_t* vertex = source.rawVertexData + layout->colorOffset + ALPHA;
     for (std::uint32_t index = 0; index < vertexCount; ++index, vertex += layout->stride) {
-        if (*vertex != FULL) {
+        if (*vertex != VertexLayout::COLOR_MAX) {
             return true;
         }
     }
@@ -434,9 +442,8 @@ void ProjectedGeometry::setAlphaThreshold(RE::NiAlphaProperty& alpha,
 auto ProjectedGeometry::scaledAlphaThreshold(std::uint8_t original,
                                              std::uint8_t lowestAlpha) -> std::uint8_t
 {
-    constexpr std::uint32_t FULL = 255;
     // Rounded down: the lowest alpha then always clears it, as 1 always cleared the original
-    return static_cast<std::uint8_t>((static_cast<std::uint32_t>(original) * lowestAlpha) / FULL);
+    return static_cast<std::uint8_t>((static_cast<std::uint32_t>(original) * lowestAlpha) / VertexLayout::COLOR_MAX);
 }
 
 void ProjectedGeometry::apply(const Swap& swap)
@@ -507,11 +514,7 @@ void ProjectedGeometry::slice()
     for (std::size_t count = 0; count < K_APPLY_BATCH && !s_swaps.empty(); ++count) {
         Swap swap = std::move(s_swaps.front());
         s_swaps.pop_front();
-        if (swap.shape != nullptr) {
-            apply(swap);
-        } else {
-            ProjectedVertexData::release(swap.data);
-        }
+        apply(swap);
     }
     retireSome();
 
@@ -581,13 +584,13 @@ void ProjectedGeometry::drainResults()
             if (raster->epoch != source->second.epoch) {
                 continue; // gathered again since; that job's layers are the ones to keep
             }
-            for (int slotY = 0; slotY < 3; ++slotY) {
-                for (int slotX = 0; slotX < 3; ++slotX) {
+            for (int slotY = 0; slotY < ShelterMap::K_BLOCK; ++slotY) {
+                for (int slotX = 0; slotX < ShelterMap::K_BLOCK; ++slotX) {
                     const auto target = s_cells.find(keyOf(raster->cellX + slotX - 1, raster->cellY + slotY - 1));
                     if (target == s_cells.end()) {
                         continue;
                     }
-                    auto& layer = raster->layers.at(static_cast<std::size_t>((slotY * 3) + slotX));
+                    auto& layer = raster->layers.at(static_cast<std::size_t>((slotY * ShelterMap::K_BLOCK) + slotX));
                     if (layer != nullptr) {
                         target->second.layers[raster->source] = std::move(layer);
                     } else if (target->second.layers.erase(raster->source) == 0) {
@@ -740,8 +743,8 @@ auto ProjectedGeometry::startGather(Clock::time_point now) -> bool
     int playerY = 0;
     if (const auto* const player = RE::PlayerCharacter::GetSingleton(); player != nullptr) {
         const auto position = player->GetPosition();
-        playerX = static_cast<int>(std::floor(position.x / ShelterMap::K_CELL_SIZE));
-        playerY = static_cast<int>(std::floor(position.y / ShelterMap::K_CELL_SIZE));
+        playerX = ShelterMap::cellOf(position.x);
+        playerY = ShelterMap::cellOf(position.y);
     }
 
     Cell* best = nullptr;
@@ -802,8 +805,7 @@ auto ProjectedGeometry::startGather(Clock::time_point now) -> bool
                 continue;
             }
             const auto position = ref->GetPosition();
-            if (static_cast<int>(std::floor(position.x / ShelterMap::K_CELL_SIZE)) == gather.cellX
-                && static_cast<int>(std::floor(position.y / ShelterMap::K_CELL_SIZE)) == gather.cellY) {
+            if (ShelterMap::cellOf(position.x) == gather.cellX && ShelterMap::cellOf(position.y) == gather.cellY) {
                 gather.refs.push_back(ref);
             }
         }
@@ -832,9 +834,7 @@ auto ProjectedGeometry::advanceGather(Clock::time_point deadline) -> bool
         }
         const auto& ref = gather.refs[gather.next];
         ++gather.next;
-        if (ref != nullptr) {
-            collectReference(*ref);
-        }
+        collectReference(*ref); // never null: startGather skips those
     }
     return true;
 }
@@ -895,28 +895,11 @@ void ProjectedGeometry::collectReference(RE::TESObjectREFR& ref)
         && (winterSnow
             || stat->data.materialObj->directionalData.flags.any(RE::BSMaterialObject::DIRECTIONAL_DATA::Flag::kSnow));
 
-    static thread_local std::vector<RE::NiAVObject*> stack;
-    stack.clear();
-    stack.push_back(root);
-    std::size_t visited = 0;
-    while (!stack.empty() && visited < K_MAX_NODES_PER_REF) {
-        auto* const object = stack.back();
-        stack.pop_back();
-        ++visited;
-        if (object == nullptr || object->GetAppCulled()) {
-            continue; // hidden subtrees render nothing (harvested states, editor markers)
-        }
-        if (auto* const node = object->AsNode(); node != nullptr) {
-            for (const auto& child : node->GetChildren()) {
-                if (child != nullptr) {
-                    stack.push_back(child.get());
-                }
-            }
-            continue;
-        }
-        const auto shape = view(*object);
+    // Hidden subtrees render nothing (harvested states, editor markers), so they are skipped
+    forEachLeaf(*root, K_MAX_NODES_PER_REF, true, [&](RE::NiAVObject& object) -> void {
+        const auto shape = view(object);
         if (!shape.has_value()) {
-            continue;
+            return;
         }
 
         if (shelter && shape->data->rawIndexData != nullptr) {
@@ -937,10 +920,10 @@ void ProjectedGeometry::collectReference(RE::TESObjectREFR& ref)
         // of 1 next to setting the flag, and switching projection back on over parameters nobody
         // ever wrote would cover the shape in black
         const bool everProjected
-            = shape->shader->flags.any(ShaderFlag::kProjectedUV) || shape->shader->projectedUVColor.alpha == 1.0F;
+            = shape->shader->flags.any(ShaderFlag::kProjectedUV) || wasProjectedOnto(*shape->shader);
         const bool receives = snowed && (colorsEnabled || treatment->profile->roofShelter) && everProjected;
         if (!receives) {
-            continue;
+            return;
         }
 
         // What the shader will compare dot(normal, up) * alpha against on this shape, from the
@@ -976,7 +959,7 @@ void ProjectedGeometry::collectReference(RE::TESObjectREFR& ref)
              = shape->alphaTest != nullptr ? originalAlphaThreshold(*shape->alphaTest) : std::uint8_t {0},
              .currentAlphaThreshold
              = shape->alphaTest != nullptr ? shape->alphaTest->alphaThreshold : std::uint8_t {0}});
-    }
+    });
 }
 
 void ProjectedGeometry::finishGather(Clock::time_point now)
@@ -1021,7 +1004,8 @@ void ProjectedGeometry::finishGather(Clock::time_point now)
 
 auto ProjectedGeometry::fieldStamp(const Cell& cell) -> std::uint64_t
 {
-    std::uint64_t stamp = hashMix(0x5EED, cell.epoch);
+    constexpr std::uint64_t STAMP_SEED = 0x5EED; /**< Any non-zero start */
+    std::uint64_t stamp = hashMix(STAMP_SEED, cell.epoch);
     for (int offsetY = -1; offsetY <= 1; ++offsetY) {
         for (int offsetX = -1; offsetX <= 1; ++offsetX) {
             const auto neighbor = s_cells.find(keyOf(cell.cellX + offsetX, cell.cellY + offsetY));
@@ -1067,8 +1051,6 @@ void ProjectedGeometry::scheduleReceivers(Clock::time_point now)
 
         ReceiverJob job;
         job.cell = key;
-        job.cellX = cell.cellX;
-        job.cellY = cell.cellY;
         job.epoch = cell.epoch;
         job.field.centerX = cell.cellX;
         job.field.centerY = cell.cellY;
@@ -1076,7 +1058,7 @@ void ProjectedGeometry::scheduleReceivers(Clock::time_point now)
             for (int offsetX = -1; offsetX <= 1; ++offsetX) {
                 const auto neighbor = s_cells.find(keyOf(cell.cellX + offsetX, cell.cellY + offsetY));
                 if (neighbor != s_cells.end()) {
-                    job.field.maps.at(static_cast<std::size_t>(((offsetY + 1) * 3) + offsetX + 1))
+                    job.field.maps.at(static_cast<std::size_t>(((offsetY + 1) * ShelterMap::K_BLOCK) + offsetX + 1))
                         = neighbor->second.map;
                 }
             }
@@ -1167,10 +1149,10 @@ void ProjectedGeometry::workerLoop()
 
 auto ProjectedGeometry::run(RasterJob& job) -> RasterResult
 {
-    std::array<ShelterMap::Layer, 9> layers;
-    for (int slotY = 0; slotY < 3; ++slotY) {
-        for (int slotX = 0; slotX < 3; ++slotX) {
-            auto& layer = layers.at(static_cast<std::size_t>((slotY * 3) + slotX));
+    std::array<ShelterMap::Layer, ShelterMap::K_BLOCK_CELLS> layers;
+    for (int slotY = 0; slotY < ShelterMap::K_BLOCK; ++slotY) {
+        for (int slotX = 0; slotX < ShelterMap::K_BLOCK; ++slotX) {
+            auto& layer = layers.at(static_cast<std::size_t>((slotY * ShelterMap::K_BLOCK) + slotX));
             layer.cellX = job.cellX + slotX - 1;
             layer.cellY = job.cellY + slotY - 1;
         }
@@ -1239,7 +1221,7 @@ auto ProjectedGeometry::measureOpenness(const Receiver& receiver,
 
 auto ProjectedGeometry::run(ReceiverJob& job) -> ReceiverResult
 {
-    constexpr float FULL = 255.0F;
+    constexpr float FULL = VertexLayout::COLOR_MAX; /**< As a float, for the alpha arithmetic */
     constexpr float MIN_UP = 0.05F; /**< Below this a surface carries no snow, and dividing by it is unwise */
 
     ReceiverResult result;

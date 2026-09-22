@@ -3,7 +3,6 @@
 #include "PCH.h"
 
 #include <bit>
-#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -37,6 +36,9 @@ struct VertexLayout {
     constexpr static std::uint64_t SIZE_MASK = 0xF; /**< The descriptor's low nibble: vertex size in dwords */
     constexpr static std::uint32_t POSITION_SIZE = 4 * sizeof(float); /**< xyz plus the bitangent slot */
     constexpr static std::uint32_t COLOR_SIZE = 4; /**< One RGBA color */
+    constexpr static std::uint8_t COLOR_MAX = 255; /**< A channel's full value: white, or an alpha of 1 */
+    constexpr static std::uint32_t NORMAL_COMPONENTS = 3; /**< x, y and z, a byte each */
+    constexpr static std::uint32_t NORMAL_SIZE = NORMAL_COMPONENTS + 1; /**< ...followed by a bitangent byte */
     constexpr static std::uint32_t MAX_STRIDE = 15 * sizeof(std::uint32_t); /**< What the size nibble can say */
 
     /**
@@ -64,7 +66,7 @@ struct VertexLayout {
         layout.normalOffset = desc.GetAttributeOffset(Vertex::VA_NORMAL);
         layout.colorOffset = desc.GetAttributeOffset(Vertex::VA_COLOR);
 
-        if (layout.stride < POSITION_SIZE || (layout.hasNormals && layout.normalOffset + 4 > layout.stride)
+        if (layout.stride < POSITION_SIZE || (layout.hasNormals && layout.normalOffset + NORMAL_SIZE > layout.stride)
             || (layout.hasColors && layout.colorOffset + COLOR_SIZE > layout.stride)) {
             return std::nullopt;
         }
@@ -114,7 +116,7 @@ struct VertexLayout {
     [[nodiscard]] auto normal(std::span<const std::uint8_t> vertex) const -> RE::NiPoint3
     {
         constexpr float BYTE_TO_UNIT = 2.0F / 255.0F;
-        const auto bytes = vertex.subspan(normalOffset, 3);
+        const auto bytes = vertex.subspan(normalOffset, NORMAL_COMPONENTS);
         return {(static_cast<float>(bytes[0]) * BYTE_TO_UNIT) - 1.0F,
                 (static_cast<float>(bytes[1]) * BYTE_TO_UNIT) - 1.0F,
                 (static_cast<float>(bytes[2]) * BYTE_TO_UNIT) - 1.0F};

@@ -3,11 +3,10 @@
 #include "ConfigLoader.hpp"
 #include "EditorIdLookup.hpp"
 #include "PbrMaterialObjects.hpp"
+#include "Text.hpp"
 
 #include "PCH.h"
 
-#include <algorithm>
-#include <compare>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -16,22 +15,6 @@
 
 using namespace XPMF;
 
-namespace {
-
-/**
- * @brief ASCII lower case; EditorIDs are plain 8 bit strings
- */
-auto toLower(std::string_view text) -> std::string
-{
-    std::string lowered(text);
-    std::ranges::transform(lowered, lowered.begin(), [](char ch) -> char {
-        return (ch >= 'A' && ch <= 'Z') ? static_cast<char>(ch - 'A' + 'a') : ch;
-    });
-    return lowered;
-}
-
-} // namespace
-
 auto MaterialClassifier::classify(const RE::BGSMaterialObject& material) -> Verdict
 {
     Verdict verdict {.editorId = EditorIdLookup::find(&material)};
@@ -39,7 +22,7 @@ auto MaterialClassifier::classify(const RE::BGSMaterialObject& material) -> Verd
         return verdict; // nothing to go by
     }
     verdict.pbr = PbrMaterialObjects::contains(verdict.editorId);
-    const std::string lowerId = toLower(verdict.editorId);
+    const std::string lowerId = Text::toLower(verdict.editorId);
 
     // The most specific of the patterns of one profile that match
     const auto bestMatch = [&](const std::vector<std::string>& patterns) -> const std::string* {
@@ -52,7 +35,7 @@ auto MaterialClassifier::classify(const RE::BGSMaterialObject& material) -> Verd
         return best;
     };
 
-    // ...and of all profiles the one whose best pattern is most specific; a PBR only profile beats
+    // ...and of all profiles the one whose best pattern is most specific; a pbr profile beats
     // a general one at the same pattern (it matches fewer materials), and the first file name in
     // alphabetical order - the order ConfigLoader hands the profiles out in - beats a later one
     std::optional<Specificity> best;

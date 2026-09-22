@@ -69,7 +69,8 @@ public:
     enum class Reason : std::uint8_t {
         EDITOR_ID, /**< The profile's pattern matched */
         EXCLUDED, /**< A profile's patterns matched, but so did one of its exclusions, and no other profile took it */
-        NOT_PBR, /**< A profile's patterns matched, but it is for PBR materials only, and no other profile took it */
+        NOT_PBR, /**< A profile's patterns matched, but it is a pbr profile and True PBR has no configuration for the
+                    material, and no other profile took it */
         NONE /**< No profile has a pattern for it */
     };
 

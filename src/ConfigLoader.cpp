@@ -1,6 +1,8 @@
 #include "ConfigLoader.hpp"
 
-#include <Windows.h>
+#include "Text.hpp"
+
+#include "PCH.h"
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -41,17 +43,6 @@ auto trim(std::string_view value) -> std::string_view
 }
 
 /**
- * @brief ASCII lower case; EditorIDs and resource paths are plain 8 bit strings inside the game
- */
-auto toLower(std::string text) -> std::string
-{
-    std::ranges::transform(text, text.begin(), [](char ch) -> char {
-        return (ch >= 'A' && ch <= 'Z') ? static_cast<char>(ch - 'A' + 'a') : ch;
-    });
-    return text;
-}
-
-/**
  * @brief Converts the file's UTF-8 to the game's ANSI code page, the form its paths and EditorIDs are in
  */
 auto toGameCodePage(std::string_view utf8) -> std::string
@@ -61,20 +52,25 @@ auto toGameCodePage(std::string_view utf8) -> std::string
         return std::string(utf8); // which is every path and EditorID anyone has ever seen
     }
 
+    // Numbers rather than REX::W32's CP_* constants: Windows.h reaches this file through the
+    // precompiled header, and its macros of the same names would break them
+    constexpr std::uint32_t UTF8_CODE_PAGE = 65001; /**< CP_UTF8 */
+    constexpr std::uint32_t ANSI_CODE_PAGE = 0; /**< CP_ACP: the system's, which the game's strings are in */
     const int utf8Length = static_cast<int>(utf8.size());
-    const int wideLength = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), utf8Length, nullptr, 0);
+    const int wideLength = REX::W32::MultiByteToWideChar(UTF8_CODE_PAGE, 0, utf8.data(), utf8Length, nullptr, 0);
     if (wideLength <= 0) {
         return std::string(utf8);
     }
     std::wstring wide(static_cast<std::size_t>(wideLength), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), utf8Length, wide.data(), wideLength);
+    REX::W32::MultiByteToWideChar(UTF8_CODE_PAGE, 0, utf8.data(), utf8Length, wide.data(), wideLength);
 
-    const int size = WideCharToMultiByte(CP_ACP, 0, wide.data(), wideLength, nullptr, 0, nullptr, nullptr);
+    const int size
+        = REX::W32::WideCharToMultiByte(ANSI_CODE_PAGE, 0, wide.data(), wideLength, nullptr, 0, nullptr, nullptr);
     if (size <= 0) {
         return std::string(utf8);
     }
     std::string narrow(static_cast<std::size_t>(size), '\0');
-    WideCharToMultiByte(CP_ACP, 0, wide.data(), wideLength, narrow.data(), size, nullptr, nullptr);
+    REX::W32::WideCharToMultiByte(ANSI_CODE_PAGE, 0, wide.data(), wideLength, narrow.data(), size, nullptr, nullptr);
     return narrow;
 }
 
@@ -97,16 +93,12 @@ auto joinList(const std::vector<std::string>& list,
 /**
  * @brief Parses one JSON file
  *
- * @return std::optional<Json> The file's root object; std::nullopt (after saying why, unless the
- *         file simply is not there) for anything else
+ * @return std::optional<Json> The file's root object; std::nullopt (after saying why) for
+ *         anything else
  */
 auto parseFile(const std::filesystem::path& path) -> std::optional<Json>
 {
     const std::string name = path.filename().string();
-    std::error_code error;
-    if (!std::filesystem::exists(path, error)) {
-        return std::nullopt;
-    }
     std::ifstream file {path};
     if (!file) {
         spdlog::error("{} was rejected: it could not be opened", name);
@@ -182,10 +174,9 @@ public:
     }
 
     /**
-     * @param mayBeBlank Whether "" is an answer or a problem (a name)
+     * @brief A string that says something: blank is a problem (a name)
      */
-    [[nodiscard]] auto string(const char* key,
-                              bool mayBeBlank = true) -> std::string
+    [[nodiscard]] auto string(const char* key) -> std::string
     {
         const auto* const value = find(key);
         if (value == nullptr) {
@@ -195,7 +186,7 @@ public:
             return wrong<std::string>(key, "a string");
         }
         std::string text(trim(value->get_ref<const std::string&>()));
-        if (text.empty() && !mayBeBlank) {
+        if (text.empty()) {
             return wrong<std::string>(key, "a string that says something");
         }
         return text;
@@ -313,29 +304,28 @@ auto accept(const Fields& fields,
 
 void ConfigLoader::loadConfig()
 {
-    // Everything lives next to the plugin DLL; current_path is the game root at load time
-    const auto plugins = std::filesystem::current_path() / "Data" / "SKSE" / "Plugins";
-    const auto profilesPath = plugins / "XPMF";
+    // The folder sits next to the plugin DLL; current_path is the game root at load time
+    const auto profilesPath = std::filesystem::current_path() / "Data" / "SKSE" / "Plugins" / "XPMF";
 
-    s_config = {};
+    s_profiles.clear();
     std::error_code error;
 
     // The profiles: one per file
     if (!std::filesystem::is_directory(profilesPath, error)) {
         spdlog::info("No XPMF folder next to the plugin; using the built-in profiles");
-        s_config.profiles = builtInProfiles();
+        s_profiles = builtInProfiles();
     } else {
         std::vector<std::filesystem::path> files;
         for (std::filesystem::directory_iterator entry {profilesPath, error}, last; !error && entry != last;
              entry.increment(error)) {
-            if (entry->is_regular_file(error) && toLower(entry->path().extension().string()) == ".json") {
+            if (entry->is_regular_file(error) && Text::toLower(entry->path().extension().string()) == ".json") {
                 files.push_back(entry->path());
             }
         }
         // Whatever order the file system lists them in, the same files always mean the same thing:
         // a.json before z.json, which is also who wins a tie between two profiles
         std::ranges::sort(files, {}, [](const std::filesystem::path& path) -> std::string {
-            return toLower(path.filename().string());
+            return Text::toLower(path.filename().string());
         });
         for (const auto& path : files) {
             const auto root = parseFile(path);
@@ -345,13 +335,13 @@ void ConfigLoader::loadConfig()
 
             Fields fields {*root};
             Profile profile;
-            profile.file = toLower(path.filename().string());
-            profile.name = fields.string("name", false);
+            profile.file = Text::toLower(path.filename().string());
+            profile.name = fields.string("name");
             for (const auto& pattern : fields.strings("editorIds")) {
-                profile.editorIds.push_back(toLower(toGameCodePage(pattern)));
+                profile.editorIds.push_back(Text::toLower(toGameCodePage(pattern)));
             }
             for (const auto& pattern : fields.strings("excludeEditorIds")) {
-                profile.excludeEditorIds.push_back(toLower(toGameCodePage(pattern)));
+                profile.excludeEditorIds.push_back(Text::toLower(toGameCodePage(pattern)));
             }
             profile.pbr = fields.boolean("pbr");
             profile.patchMaterial = fields.boolean("patchMaterial");
@@ -371,9 +361,9 @@ void ConfigLoader::loadConfig()
                 spdlog::warn("{}: \"editorIds\" is empty, so the profile matches no material object",
                              path.filename().string());
             }
-            s_config.profiles.push_back(std::move(profile));
+            s_profiles.push_back(std::move(profile));
         }
-        if (s_config.profiles.empty()) {
+        if (s_profiles.empty()) {
             spdlog::warn("The XPMF folder holds no usable *.json profile, so there is nothing to do");
         }
     }
@@ -381,7 +371,7 @@ void ConfigLoader::loadConfig()
     // Naming one of the engine's own projected textures asks for nothing to be substituted, which
     // is what leaving the texture out says too - and saves loading a second copy to swap in for
     // the first
-    for (auto& profile : s_config.profiles) {
+    for (auto& profile : s_profiles) {
         const std::array<std::pair<std::string*, const char*>, 4> textures {
             {{&profile.diffuseTexture, GAME_DIFFUSE},
              {&profile.normalTexture, GAME_NORMAL},
@@ -398,8 +388,8 @@ void ConfigLoader::loadConfig()
     const auto orGame = [](const std::string& path) -> std::string_view {
         return path.empty() ? std::string_view {"(not replaced)"} : std::string_view {path};
     };
-    spdlog::info("Config Loaded: {} profiles", s_config.profiles.size());
-    for (const auto& profile : s_config.profiles) {
+    spdlog::info("Config Loaded: {} profiles", s_profiles.size());
+    for (const auto& profile : s_profiles) {
         spdlog::info("Config Loaded: [{}] File: {}", profile.name, profile.file.empty() ? "(built in)" : profile.file);
         spdlog::info("Config Loaded: [{}] EditorIDs: {}", profile.name, joinList(profile.editorIds));
         spdlog::info("Config Loaded: [{}] Exclude EditorIDs: {}", profile.name, joinList(profile.excludeEditorIds));
@@ -421,28 +411,23 @@ void ConfigLoader::loadConfig()
     }
 }
 
-auto ConfigLoader::getProfiles() -> const std::vector<Profile>& { return s_config.profiles; }
+auto ConfigLoader::getProfiles() -> const std::vector<Profile>& { return s_profiles; }
 
-auto ConfigLoader::isAnyMaterialPatched() -> bool
-{
-    return std::ranges::any_of(s_config.profiles, &Profile::patchMaterial);
-}
+auto ConfigLoader::isAnyMaterialPatched() -> bool { return std::ranges::any_of(s_profiles, &Profile::patchMaterial); }
 
 auto ConfigLoader::isAnyGeometryChanged() -> bool
 {
-    return std::ranges::any_of(s_config.profiles, [](const Profile& profile) -> bool {
+    return std::ranges::any_of(s_profiles, [](const Profile& profile) -> bool {
         return profile.neutralizeVertexColors || profile.roofShelter;
     });
 }
 
-auto ConfigLoader::isAnyRoofSheltered() -> bool
-{
-    return std::ranges::any_of(s_config.profiles, &Profile::roofShelter);
-}
+auto ConfigLoader::isAnyRoofSheltered() -> bool { return std::ranges::any_of(s_profiles, &Profile::roofShelter); }
 
 auto ConfigLoader::builtInProfiles() -> std::vector<Profile>
 {
-    // What the shipped snow.json and ash.json say
+    // What the shipped snow.json and ash.json say; the PBR ones need PBR textures, so they are
+    // not built in
     Profile snow;
     snow.name = "snow";
     snow.editorIds = {DEFAULT_SNOW_PATTERN};
@@ -468,7 +453,7 @@ auto ConfigLoader::builtInProfiles() -> std::vector<Profile>
 
 auto ConfigLoader::normalizeTexturePath(std::string_view raw) -> std::string
 {
-    std::string path = toLower(toGameCodePage(trim(raw)));
+    std::string path = Text::toLower(toGameCodePage(trim(raw)));
     if (path.empty()) {
         return path;
     }

@@ -61,10 +61,11 @@ namespace XPMF {
  * was, textures included. A profile that names no diffuse leaves the color as the record has it,
  * marked; its other textures still go with the draws.
  *
- * Two fallbacks, both untagged. With bEnableProjecteUVDiffuseNormals off the shader samples
- * nothing and uses the color as is, so a material gets mean(its texture). And should the texture
- * not load as a renderer texture, the game's average is divided out of the color instead:
- * color = mean(texture) / mean(ProjectedDiffuse).
+ * Two fallbacks. With bEnableProjecteUVDiffuseNormals off the shader samples no diffuse and uses
+ * the color as is, so a material gets mean(its texture) - still tagged, since the coverage noise
+ * is sampled regardless and the profile's may go with the draws. And should the texture not load
+ * as a renderer texture, there is nothing to tag: the game's average is divided out of the color
+ * instead, color = mean(texture) / mean(ProjectedDiffuse), and the game's textures stay.
  *
  * What stays out of reach is tiling: the shader derives the projected diffuse's coordinates from
  * the coverage noise's, scaled by fProjectedUVDiffuseNormalTilingScale, and the noise's scale is
@@ -97,9 +98,6 @@ public:
     static void onDataLoaded();
 
 private:
-    constexpr static const char* PROJECTED_DIFFUSE
-        = R"(textures\effects\projecteddiffuse.dds)"; /**< The engine's hardcoded paths (it names no others) */
-    constexpr static const char* PROJECTED_NOISE = R"(textures\effects\projectednoise.dds)";
     constexpr static const char* PROJECTED_DIFFUSE_SETTING
         = "bEnableProjecteUVDiffuseNormals:Display"; /**< Spelled as the engine spells it */
     constexpr static float MIN_DIVISOR = 1.0F / 255.0F; /**< One 8 bit step: a texture channel averaging less
@@ -121,8 +119,9 @@ private:
     /**
      * @brief Makes a profile's textures what its materials show
      *
-     * @return std::optional<Match> std::nullopt when a diffuse it names could not be read at all
-     *         (already logged), in which case its materials are left as they are
+     * @return std::optional<Match> std::nullopt when nothing can be done for it - a diffuse it
+     *         names could not be read at all, or no set of textures could be added (already
+     *         logged) - in which case its materials are left as they are
      */
     [[nodiscard]] static auto matchTextures(const ConfigLoader::Profile& profile) -> std::optional<Match>;
 

@@ -1,5 +1,6 @@
 {
     "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+    "$comment": "directxtk and rapidcsv are CommonLibSSE-NG's, which builds from this manifest; the plugin itself uses directxtex, nlohmann-json and spdlog",
     "name": "xpmf",
     "version-string": "0.1.0",
     "dependencies": [

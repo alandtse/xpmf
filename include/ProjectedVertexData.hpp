@@ -45,7 +45,8 @@ class ProjectedVertexData {
 public:
     ProjectedVertexData() = delete;
 
-    using Data = RE::BSGraphics::TriShape;
+    using Data = RE::BSGraphics::TriShape; /**< The engine's renderer data of a shape: its vertex and index
+                                              buffers, with the CPU copies it keeps of them */
 
     /**
      * @brief What is known about the shape the data belongs to
@@ -111,7 +112,14 @@ public:
      */
     [[nodiscard]] static auto fingerprint(std::span<const std::uint8_t> alpha) -> std::uint64_t;
 
+    /**
+     * @brief One more reference on renderer data (the engine's own count)
+     */
     static void addRef(Data* data);
+
+    /**
+     * @brief One reference less; at zero the engine frees the data, D3D buffers and CPU copies alike
+     */
     static void release(Data* data);
 
     /**
@@ -139,9 +147,8 @@ private:
      */
     struct Recipe {
         bool whiten {}; /**< rgb = white; otherwise the mesh's */
-        bool keepAlpha {}; /**< alpha = the mesh's */
-        std::uint8_t alphaAll {}; /**< ...or this everywhere */
-        std::span<const std::uint8_t> alpha; /**< ...or these */
+        bool keepAlpha {}; /**< alpha = the mesh's; otherwise 1 everywhere... */
+        std::span<const std::uint8_t> alpha; /**< ...or these, one per vertex, whatever keepAlpha says */
     };
 
     struct Entry {

@@ -24,11 +24,11 @@ auto EditorIdLookup::find(const RE::TESForm* form) -> std::string
 auto EditorIdLookup::resolve() -> GetFormEditorId_t
 {
     static const GetFormEditorId_t s_getFormEditorId = []() -> GetFormEditorId_t {
-        const auto tweaks = REX::W32::GetModuleHandleW(L"po3_Tweaks");
+        const auto tweaks = REX::W32::GetModuleHandleW(TWEAKS_MODULE);
         if (tweaks == nullptr) {
             return nullptr;
         }
-        return reinterpret_cast<GetFormEditorId_t>(REX::W32::GetProcAddress(tweaks, "GetFormEditorID"));
+        return reinterpret_cast<GetFormEditorId_t>(REX::W32::GetProcAddress(tweaks, TWEAKS_EXPORT));
     }();
     return s_getFormEditorId;
 }

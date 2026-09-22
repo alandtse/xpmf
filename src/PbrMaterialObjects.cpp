@@ -15,8 +15,7 @@ using namespace XPMF;
 void PbrMaterialObjects::load()
 {
     s_editorIds.clear();
-    s_communityShaders = REX::W32::GetModuleHandleW(COMMUNITY_SHADERS_MODULE) != nullptr;
-    if (!s_communityShaders) {
+    if (REX::W32::GetModuleHandleW(COMMUNITY_SHADERS_MODULE) == nullptr) {
         spdlog::info("Community Shaders is not loaded; True PBR material object configurations play no part");
         return;
     }
@@ -49,8 +48,6 @@ void PbrMaterialObjects::load()
     spdlog::info(
         "Community Shaders is loaded; {} has {} material object configuration(s)", CONFIG_FOLDER, s_editorIds.size());
 }
-
-auto PbrMaterialObjects::isCommunityShadersLoaded() -> bool { return s_communityShaders; }
 
 auto PbrMaterialObjects::contains(std::string_view editorId) -> bool
 {

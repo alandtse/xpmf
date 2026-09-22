@@ -28,7 +28,7 @@ namespace XPMF {
  * the vertex colors this plugin wants them to have
  *
  * Two jobs, both done by swapping a shape's renderer data for a variant (see ProjectedVertexData):
- * keeping vertex colors from tinting the matched material (a profile's neutralizeVertexColors)
+ * keeping vertex colors from tinting the projected material (a profile's neutralizeVertexColors)
  * and keeping it out from under roofs through vertex alpha (its roofShelter). Which of the two a
  * shape gets, and how far in under a roof its projection fades, are the settings of the profile
  * its static's material object belongs to. "Snow" below stands for any of them.
@@ -36,7 +36,7 @@ namespace XPMF {
  * The first pass happens inside TESBoundObject::Clone3D, hooked through TESObjectSTAT's vtable
  * (slot 0x40; statics are the only forms the engine applies a material object to). The engine
  * has just set Projected_UV on the clone's shader properties, nothing else can see the clone
- * yet, and it gets the WHITE variant there and then - so snow has the right color from the
+ * yet, and it gets the shared (white) variant there and then - so snow has the right color from the
  * first frame, on large references too. What cannot be known at that point is where the
  * clone will end up, which way will be up for it, and what will stand above it.
  *
@@ -81,15 +81,19 @@ public:
      * @brief What MaterialMatcher found out about one single pass material object of a profile
      *
      * A static carrying such a material has its projection on every lit shape, and those shapes
-     * get the profile's vertex colors and shelter - whether the record was matched or left alone.
+     * get the profile's vertex colors and shelter - whether the record was patched or left alone.
      */
     struct Treatment {
         const ConfigLoader::Profile* profile {}; /**< Never nullptr; points into ConfigLoader's list */
         float meanNoise {}; /**< Average of the coverage noise the material's draws sample */
         bool untouched {}; /**< Record left as it was (a True PBR configuration, patchMaterial off, textures
-                              missing), so that a log can say so; nothing is done differently for it here */
+                              missing): its shapes get the vertex colors and shelter like any other, but
+                              Seasons of Skyrim's winter snow is not re-colored to it (adoptWinterSnow) */
     };
 
+    /**
+     * @brief Every single pass material object of a profile, and what was found out about it
+     */
     using Materials = std::unordered_map<const RE::BGSMaterialObject*, Treatment>;
 
     /**
@@ -144,7 +148,7 @@ private:
                           RE::TESObjectREFR* ref,
                           bool arg3) -> RE::NiAVObject*;
         static inline REL::Relocation<decltype(thunk)> s_func; /**< Whatever occupied the slot before */
-        constexpr static std::size_t SLOT = 0x40;
+        constexpr static std::size_t SLOT = 0x40; /**< TESBoundObject::Clone3D(TESObjectREFR*, bool) */
     };
 
     /**
@@ -221,8 +225,6 @@ private:
 
     struct ReceiverJob {
         CellKey cell {};
-        int cellX {};
-        int cellY {};
         std::uint64_t epoch {};
         ShelterMap::Field field;
         std::vector<Receiver> receivers;
@@ -233,7 +235,7 @@ private:
         int cellX {};
         int cellY {};
         std::uint64_t epoch {};
-        std::array<std::shared_ptr<const ShelterMap::Heights>, 9> layers;
+        std::array<std::shared_ptr<const ShelterMap::Heights>, ShelterMap::K_BLOCK_CELLS> layers;
         std::vector<Occluder> retired;
     };
 

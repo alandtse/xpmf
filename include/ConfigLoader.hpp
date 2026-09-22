@@ -21,7 +21,7 @@ namespace XPMF {
  * a list in it so that a mod can bring a profile for its own materials without overwriting
  * anyone else's - in a mod manager the files of different mods simply end up side by side. A
  * material object that several profiles match belongs to the one that matches it most
- * specifically (MaterialClassifier: the pattern with the most literal characters, a PBR only
+ * specifically (MaterialClassifier: the pattern with the most literal characters, a pbr
  * profile over a general one), and among equals to the first file name in alphabetical order -
  * which is how an added profile takes a few materials out of a shipped one's hands: name them.
  *
@@ -35,7 +35,7 @@ namespace XPMF {
  * rejected as a whole, with every reason in one error in the log - half a profile is not
  * something anyone asked for. A texture that is not named is not replaced. Keys that are not
  * settings only earn a warning, a "comment" key being the one way to leave a note in JSON.
- * Without the folder the built-in profiles (snow, ash) apply; with it, exactly the valid files
+ * Without the folder the built-in profiles (ash, snow) apply; with it, exactly the valid files
  * in it do - deleting ash.json is how ash is left alone.
  */
 class ConfigLoader {
@@ -72,7 +72,22 @@ public:
 
         bool roofShelter {}; /**< Whether vertex alpha is rewritten to keep the projection out from under cover */
         float shelterFade {}; /**< World units over which it fades out under cover */
+
+        /**
+         * @brief The name with the file it came from: two files may well share a name
+         */
+        [[nodiscard]] auto label() const -> std::string { return file.empty() ? name : name + " (" + file + ")"; }
     };
+
+    /**
+     * @brief The engine's own projected textures: a profile that names one of them asks for no
+     * substitution, the same as not naming a texture, and they are what every draw without a
+     * profile's set samples
+     */
+    constexpr static const char* GAME_DIFFUSE = R"(textures\effects\projecteddiffuse.dds)";
+    constexpr static const char* GAME_NORMAL = R"(textures\effects\projectednormal.dds)";
+    constexpr static const char* GAME_NOISE = R"(textures\effects\projectednoise.dds)";
+    constexpr static const char* GAME_DETAIL_NORMAL = R"(textures\effects\projectednormaldetail.dds)";
 
     /**
      * @brief Loads the profiles in the XPMF folder
@@ -86,22 +101,22 @@ public:
      *         when there is no folder. Stable for the life of the process: other classes keep
      *         pointers into it
      */
-    static auto getProfiles() -> const std::vector<Profile>&;
+    [[nodiscard]] static auto getProfiles() -> const std::vector<Profile>&;
 
     /**
      * @brief Whether any profile patches materials, i.e. whether the draw hook is needed
      */
-    static auto isAnyMaterialPatched() -> bool;
+    [[nodiscard]] static auto isAnyMaterialPatched() -> bool;
 
     /**
      * @brief Whether any profile changes vertex colors or alpha, i.e. whether the Clone3D hook is needed
      */
-    static auto isAnyGeometryChanged() -> bool;
+    [[nodiscard]] static auto isAnyGeometryChanged() -> bool;
 
     /**
      * @brief Whether any profile keeps its projection out from under roofs, i.e. whether height maps are needed
      */
-    static auto isAnyRoofSheltered() -> bool;
+    [[nodiscard]] static auto isAnyRoofSheltered() -> bool;
 
     /**
      * @brief Turns whatever the user wrote for a texture into a resource system path
@@ -116,9 +131,9 @@ private:
     //
     // DEFAULT CFG VALUES
     //
-    constexpr static const char* DEFAULT_SNOW_DIFFUSE
-        = R"(textures\landscape\snow01landscape.dds)"; /**< The vanilla landscape snow */
-    constexpr static const char* DEFAULT_SNOW_NORMAL = R"(textures\landscape\snow01landscape_n.dds)";
+    constexpr static const char* DEFAULT_SNOW_DIFFUSE = R"(textures\landscape\snow01.dds)"; /**< LSnow01, the vanilla
+                                                                                            snow ground */
+    constexpr static const char* DEFAULT_SNOW_NORMAL = R"(textures\landscape\snow01_n.dds)";
     constexpr static const char* DEFAULT_SNOW_PATTERN = "*snow*"; /**< Every vanilla and DLC snow material has it in
                                                                      its EditorID, and no other material does */
     constexpr static const char* DEFAULT_ASH_DIFFUSE
@@ -134,23 +149,7 @@ private:
     constexpr static float DEFAULT_SHELTER_FADE = 96.0F; /**< About how far wind carries snow in under an eave */
     constexpr static float MAX_SHELTER_FADE = 512.0F; /**< Every covered vertex searches this far for open sky */
 
-    /**
-     * @brief The engine's own projected textures: a profile that names one of them asks for no
-     * substitution, the same as not naming a texture
-     */
-    constexpr static const char* GAME_DIFFUSE = R"(textures\effects\projecteddiffuse.dds)";
-    constexpr static const char* GAME_NORMAL = R"(textures\effects\projectednormal.dds)";
-    constexpr static const char* GAME_NOISE = R"(textures\effects\projectednoise.dds)";
-    constexpr static const char* GAME_DETAIL_NORMAL = R"(textures\effects\projectednormaldetail.dds)";
-
-    /**
-     * @brief ConfigMap structure which holds the configuration values for the plugin
-     */
-    struct ConfigMap {
-        std::vector<Profile> profiles; /**< In file name order */
-    };
-
-    static inline ConfigMap s_config; /**< Holds the current configuration values for the plugin */
+    static inline std::vector<Profile> s_profiles; /**< In file name order */
 
     /**
      * @brief The profiles the plugin ships with, snow and ash, for an installation without the folder

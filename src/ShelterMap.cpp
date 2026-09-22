@@ -14,8 +14,6 @@ using namespace XPMF;
 
 namespace {
 
-constexpr int SPAN = 3; /**< Cells per side of a layer block / field */
-
 /**
  * @brief Floor division; C++ division truncates toward zero, and half the world has negative coordinates
  */
@@ -36,7 +34,7 @@ auto nodeIndex(int localX,
 } // namespace
 
 void ShelterMap::rasterize(std::array<Layer,
-                                      9>& layers,
+                                      K_BLOCK_CELLS>& layers,
                            const RE::NiPoint3& first,
                            const RE::NiPoint3& second,
                            const RE::NiPoint3& third)
@@ -50,17 +48,17 @@ void ShelterMap::rasterize(std::array<Layer,
     }
 
     // Lattice nodes inside the footprint's bounding box, clipped to the block of layers
-    const Layer& center = layers[4];
+    const Layer& center = layers[K_BLOCK_CENTER];
     const int blockWest = (center.cellX - 1) * K_CELLS;
     const int blockSouth = (center.cellY - 1) * K_CELLS;
     const int nodeWest
         = std::max(static_cast<int>(std::ceil(std::min({first.x, second.x, third.x}) / K_SPACING)), blockWest);
     const int nodeEast = std::min(static_cast<int>(std::floor(std::max({first.x, second.x, third.x}) / K_SPACING)),
-                                  blockWest + (SPAN * K_CELLS));
+                                  blockWest + (K_BLOCK * K_CELLS));
     const int nodeSouth
         = std::max(static_cast<int>(std::ceil(std::min({first.y, second.y, third.y}) / K_SPACING)), blockSouth);
     const int nodeNorth = std::min(static_cast<int>(std::floor(std::max({first.y, second.y, third.y}) / K_SPACING)),
-                                   blockSouth + (SPAN * K_CELLS));
+                                   blockSouth + (K_BLOCK * K_CELLS));
 
     const float inverse = 1.0F / denominator;
     constexpr float EDGE_TOLERANCE = -1.0e-4F; // nodes exactly on a shared edge belong to both triangles
@@ -87,10 +85,10 @@ void ShelterMap::rasterize(std::array<Layer,
                 for (int shareX = 0; shareX <= (localX == 0 ? 1 : 0); ++shareX) {
                     const int slotX = cellX - shareX - center.cellX + 1;
                     const int slotY = cellY - shareY - center.cellY + 1;
-                    if (slotX < 0 || slotX >= SPAN || slotY < 0 || slotY >= SPAN) {
+                    if (slotX < 0 || slotX >= K_BLOCK || slotY < 0 || slotY >= K_BLOCK) {
                         continue;
                     }
-                    Layer& layer = layers.at(static_cast<std::size_t>((slotY * SPAN) + slotX));
+                    Layer& layer = layers.at(static_cast<std::size_t>((slotY * K_BLOCK) + slotX));
                     if (layer.top.empty()) {
                         layer.top.assign(static_cast<std::size_t>(K_NODES) * K_NODES, K_NOTHING);
                     }
@@ -109,17 +107,21 @@ auto ShelterMap::Field::topAt(int nodeX,
     const int cellY = floorDiv(nodeY, K_CELLS);
     const int slotX = cellX - centerX + 1;
     const int slotY = cellY - centerY + 1;
-    if (slotX < 0 || slotX >= SPAN || slotY < 0 || slotY >= SPAN) {
+    if (slotX < 0 || slotX >= K_BLOCK || slotY < 0 || slotY >= K_BLOCK) {
         return K_NOTHING;
     }
-    const auto& map = maps.at(static_cast<std::size_t>((slotY * SPAN) + slotX));
+    const auto& map = maps.at(static_cast<std::size_t>((slotY * K_BLOCK) + slotX));
     return map != nullptr ? (*map)[nodeIndex(nodeX - (cellX * K_CELLS), nodeY - (cellY * K_CELLS))] : K_NOTHING;
 }
 
+auto ShelterMap::cellOf(float coordinate) -> int { return static_cast<int>(std::floor(coordinate / K_CELL_SIZE)); }
+
+auto ShelterMap::nodeOf(float coordinate) -> int { return static_cast<int>(std::floor(coordinate / K_SPACING)); }
+
 auto ShelterMap::Field::isCovered(const RE::NiPoint3& point) const -> bool
 {
-    const int nodeX = static_cast<int>(std::floor(point.x / K_SPACING));
-    const int nodeY = static_cast<int>(std::floor(point.y / K_SPACING));
+    const int nodeX = nodeOf(point.x);
+    const int nodeY = nodeOf(point.y);
     const float ceiling = point.z + K_CLEARANCE;
     return topAt(nodeX, nodeY) > ceiling && topAt(nodeX + 1, nodeY) > ceiling && topAt(nodeX, nodeY + 1) > ceiling
         && topAt(nodeX + 1, nodeY + 1) > ceiling;
@@ -131,8 +133,8 @@ auto ShelterMap::Field::depthUnderCover(const RE::NiPoint3& point,
     if (!isCovered(point)) {
         return 0.0F;
     }
-    const int nodeX = static_cast<int>(std::floor(point.x / K_SPACING));
-    const int nodeY = static_cast<int>(std::floor(point.y / K_SPACING));
+    const int nodeX = nodeOf(point.x);
+    const int nodeY = nodeOf(point.y);
     const float ceiling = point.z + K_CLEARANCE;
 
     // Distance to the nearest column that is open at this height - the drip line, from inside
@@ -187,7 +189,8 @@ auto ShelterMap::Field::measureOpenness(std::span<const RE::NiPoint3> positions,
         const float deltaY = to.y - from.y;
         const float deltaZ = to.z - from.z;
         const float length = std::sqrt((deltaX * deltaX) + (deltaY * deltaY) + (deltaZ * deltaZ));
-        if (length <= 1.0F) {
+        constexpr float MIN_EDGE_LENGTH = 1.0F; /**< Shorter is a doubled vertex, not a direction */
+        if (length <= MIN_EDGE_LENGTH) {
             return;
         }
         // Fraction of the edge, measured from the open end, that lies in the open

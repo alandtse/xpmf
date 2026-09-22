@@ -52,6 +52,8 @@ public:
 
 private:
     using GetFormEditorId_t = const char* (*)(std::uint32_t formId); /**< Signature of the Tweaks export */
+    constexpr static const wchar_t* TWEAKS_MODULE = L"po3_Tweaks"; /**< po3_Tweaks.dll */
+    constexpr static const char* TWEAKS_EXPORT = "GetFormEditorID"; /**< The one export of its EditorID cache */
 
     /**
      * @brief Resolves po3_Tweaks.dll!GetFormEditorID once

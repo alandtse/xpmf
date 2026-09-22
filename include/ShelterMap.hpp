@@ -37,8 +37,13 @@ public:
 
     constexpr static float K_CELL_SIZE = 4096.0F; /**< World units per exterior cell side */
     constexpr static float K_SPACING = 32.0F; /**< Lattice spacing; a roof edge is located to about half of it */
-    constexpr static int K_CELLS = 128; /**< Lattice cells per cell side (K_CELL_SIZE / K_SPACING) */
+    constexpr static int K_CELLS = static_cast<int>(K_CELL_SIZE / K_SPACING); /**< Lattice cells per cell side */
     constexpr static int K_NODES = K_CELLS + 1; /**< Lattice nodes per side; the last row is the neighbor's first */
+    constexpr static int K_BLOCK = 3; /**< Cells per side of the block of cells a source cell's triangles reach and a
+                                         query may read: the cell and its neighbors, since a building on a border
+                                         overhangs the next cell and never the one beyond */
+    constexpr static int K_BLOCK_CELLS = K_BLOCK * K_BLOCK; /**< Cells in a block, row major */
+    constexpr static std::size_t K_BLOCK_CENTER = K_BLOCK_CELLS / 2; /**< The block's middle cell */
     constexpr static float K_CLEARANCE = 24.0F; /**< How far above a point a surface must be to shelter it: more
                                                    than the lattice can misjudge a surface the point itself
                                                    lies on, less than any roof a snowed-on thing fits under */
@@ -62,10 +67,11 @@ public:
      * A node takes the triangle's height where the node's column passes through it, keeping
      * the maximum. Near-vertical triangles cover no columns and cost a bounding box test.
      *
-     * @param layers 3x3 layers around the source cell, row major, [4] being the source itself
+     * @param layers The block of layers around the source cell, row major, [K_BLOCK_CENTER] being
+     *        the source itself
      */
     static void rasterize(std::array<Layer,
-                                     9>& layers,
+                                     K_BLOCK_CELLS>& layers,
                           const RE::NiPoint3& first,
                           const RE::NiPoint3& second,
                           const RE::NiPoint3& third);
@@ -76,27 +82,8 @@ public:
     struct Field {
         int centerX {}; /**< Cell X of the middle map */
         int centerY {}; /**< Cell Y of the middle map */
-        std::array<std::shared_ptr<const Heights>, 9> maps; /**< Row major; nullptr where no map exists yet */
-
-        /**
-         * @brief Whether a world space point has something overhead
-         *
-         * Under cover only when all four lattice columns around the point top out more than
-         * K_CLEARANCE above it: interpolating across the foot of a wall would otherwise put a
-         * snow-free band along every vertical surface.
-         */
-        [[nodiscard]] auto isCovered(const RE::NiPoint3& point) const -> bool;
-
-        /**
-         * @brief How far inside cover a world space point is
-         *
-         * @param point The point
-         * @param reach The farthest distance worth reporting (the fade distance)
-         * @return float 0 in the open; otherwise the distance, capped at reach, to the nearest
-         *         lattice column that is open at the point's height
-         */
-        [[nodiscard]] auto depthUnderCover(const RE::NiPoint3& point,
-                                           float reach) const -> float;
+        std::array<std::shared_ptr<const Heights>, K_BLOCK_CELLS> maps; /**< Row major; nullptr where no map exists
+                                                                          yet */
 
         /**
          * @brief Per vertex openness (1 in the open .. 0 deep under cover) of one mesh
@@ -131,7 +118,34 @@ public:
          */
         [[nodiscard]] auto topAt(int nodeX,
                                  int nodeY) const -> float;
+
+        /**
+         * @brief Whether a world space point has something overhead
+         *
+         * Under cover only when all four lattice columns around the point top out more than
+         * K_CLEARANCE above it: interpolating across the foot of a wall would otherwise put a
+         * snow-free band along every vertical surface.
+         */
+        [[nodiscard]] auto isCovered(const RE::NiPoint3& point) const -> bool;
+
+        /**
+         * @brief How far inside cover a world space point is
+         *
+         * @param point The point
+         * @param reach The farthest distance worth reporting (the fade distance plus a spacing)
+         * @return float 0 in the open; otherwise the distance to the nearest lattice column that
+         *         is open at the point's height, less half a spacing (the drip line runs
+         *         somewhere between that column and the covered one before it), never above
+         *         reach less that half spacing and never below 0
+         */
+        [[nodiscard]] auto depthUnderCover(const RE::NiPoint3& point,
+                                           float reach) const -> float;
     };
+
+    /**
+     * @brief The exterior cell a world coordinate falls in, on one axis
+     */
+    [[nodiscard]] static auto cellOf(float coordinate) -> int;
 
     /**
      * @brief What cover means for a whole shape
@@ -146,7 +160,7 @@ public:
      * @brief What cover does to the vertices of a shape that can hold snow
      */
     struct Tally {
-        std::size_t holders {}; /**< Vertices facing up enough to show snow with nothing overhead */
+        std::size_t holders {}; /**< Vertices facing up enough to hold snow, covered or not */
         std::size_t covered {}; /**< ...of those, with anything overhead */
         std::size_t buried {}; /**< ...entirely under cover */
         std::size_t bare {}; /**< ...far enough under cover for their snow to be gone */
@@ -191,6 +205,12 @@ public:
      */
     [[nodiscard]] static auto combine(const std::vector<std::shared_ptr<const Heights>>& layers)
         -> std::shared_ptr<const Heights>;
+
+private:
+    /**
+     * @brief The lattice node a world coordinate falls in, on one axis
+     */
+    [[nodiscard]] static auto nodeOf(float coordinate) -> int;
 };
 
 } // namespace XPMF

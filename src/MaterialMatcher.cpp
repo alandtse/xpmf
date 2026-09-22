@@ -100,7 +100,7 @@ void MaterialMatcher::onDataLoaded()
                      describeForm(*material, verdict.editorId),
                      MaterialClassifier::isSinglePass(*material) ? "single pass" : "multipass",
                      usage[material],
-                     verdict.profile != nullptr ? std::format("profile '{}'", verdict.profile->name) : "no profile",
+                     verdict.profile != nullptr ? std::format("profile '{}'", verdict.profile->label()) : "no profile",
                      MaterialClassifier::describe(verdict.reason),
                      verdict.pattern.empty() ? "" : " " + verdict.pattern,
                      verdict.pbr ? " [True PBR configuration]" : "");
@@ -131,7 +131,7 @@ void MaterialMatcher::onDataLoaded()
     for (const auto& profile : ConfigLoader::getProfiles()) {
         const auto found = byProfile.find(&profile);
         if (found == byProfile.end()) {
-            spdlog::info("Profile '{}': no material object matches it", profile.name);
+            spdlog::info("Profile '{}': no material object matches it", profile.label());
             continue;
         }
 
@@ -157,7 +157,7 @@ void MaterialMatcher::onDataLoaded()
                              "record is left untouched; its shapes still get the profile's vertex colors and roof "
                              "shelter",
                              describeForm(*candidate.material, candidate.editorId),
-                             profile.name);
+                             profile.label());
             }
             (profile.patchMaterial && !handsOff ? ours : untouched).push_back(&candidate);
         }
@@ -167,13 +167,13 @@ void MaterialMatcher::onDataLoaded()
         if (!ours.empty()) {
             match = matchTextures(profile);
             if (!match.has_value()) {
-                spdlog::error("Profile '{}': its {} material objects stay as they are", profile.name, ours.size());
+                spdlog::error("Profile '{}': its {} material objects stay as they are", profile.label(), ours.size());
                 untouched.insert(untouched.end(), ours.begin(), ours.end());
                 ours.clear();
             }
         }
         // Where a snow line lies under a roof depends on the average of the noise its draws sample
-        const float ownNoise
+        const float noiseAverage
             = profile.roofShelter && match.has_value() && match->ownNoise ? meanNoise(profile.noiseTexture) : gameNoise;
 
         std::size_t statics = 0;
@@ -202,7 +202,7 @@ void MaterialMatcher::onDataLoaded()
             data.singlePassColor = color;
             data.flags = isSnow ? Flag::kSnow : Flag::kNone;
 
-            materials.emplace(material, ProjectedGeometry::Treatment {.profile = &profile, .meanNoise = ownNoise});
+            materials.emplace(material, ProjectedGeometry::Treatment {.profile = &profile, .meanNoise = noiseAverage});
             statics += usage[material];
         }
         for (const auto* const candidate : untouched) {
@@ -213,7 +213,7 @@ void MaterialMatcher::onDataLoaded()
 
         spdlog::info("Profile '{}': patched {} material objects used by {} statics (diffuse {}); {} single pass left "
                      "as they are ({} of them for having a True PBR configuration), {} multipass ignored",
-                     profile.name,
+                     profile.label(),
                      ours.size(),
                      statics,
                      profile.diffuseTexture.empty() ? "not replaced" : profile.diffuseTexture.c_str(),
@@ -236,20 +236,21 @@ auto MaterialMatcher::matchTextures(const ConfigLoader::Profile& profile) -> std
     const auto logged = [&](const Match& match) -> void {
         if (match.color.has_value()) {
             spdlog::info("Profile '{}': single pass color ({:.4f}, {:.4f}, {:.4f}){}",
-                         profile.name,
+                         profile.label(),
                          match.color->red,
                          match.color->green,
                          match.color->blue,
                          match.set.has_value() ? ", tagged" : "");
         } else {
             spdlog::info("Profile '{}': its materials keep their own single pass colors{}",
-                         profile.name,
+                         profile.label(),
                          match.set.has_value() ? ", tagged" : "");
         }
     };
 
     // The textures themselves, through a color that says whose draw it is: white where the
-    // profile's diffuse supplies the look, the record's own where the game's diffuse stays
+    // profile's diffuse supplies the look (its average, where the shader is set to sample none),
+    // the record's own where the game's diffuse stays
     if (const auto added = ProjectedTextures::add({.diffuse = profile.diffuseTexture,
                                                    .normal = profile.normalTexture,
                                                    .noise = profile.noiseTexture,
@@ -265,12 +266,12 @@ auto MaterialMatcher::matchTextures(const ConfigLoader::Profile& profile) -> std
             const auto mean = TextureColor::meanColor(profile.diffuseTexture);
             if (!mean.has_value()) {
                 spdlog::error(
-                    "Profile '{}': without {} there is nothing to match", profile.name, profile.diffuseTexture);
+                    "Profile '{}': without {} there is nothing to match", profile.label(), profile.diffuseTexture);
                 return std::nullopt;
             }
             spdlog::info("Profile '{}': {} is off, so the shader samples no projected diffuse and its materials get "
                          "the texture's average; its normal map cannot apply",
-                         profile.name,
+                         profile.label(),
                          PROJECTED_DIFFUSE_SETTING);
             match.color = mean;
         }
@@ -281,30 +282,33 @@ auto MaterialMatcher::matchTextures(const ConfigLoader::Profile& profile) -> std
         return std::nullopt; // no room for another set: nothing can be done for the profile
     }
 
-    // The diffuse did not load as a renderer texture. From here on the color has to carry it,
-    // which leaves nothing to tag: the profile's draws cannot be told apart, and its other
-    // textures stay the game's
+    // The diffuse did not load as a renderer texture (or no set could be added for it). From here
+    // on the color has to carry it, which leaves nothing to tag: the profile's draws cannot be
+    // told apart, and its other textures stay the game's
     const auto mean = TextureColor::meanColor(profile.diffuseTexture);
     if (!mean.has_value()) {
-        spdlog::error("Profile '{}': without {} there is nothing to match", profile.name, profile.diffuseTexture);
+        spdlog::error("Profile '{}': without {} there is nothing to match", profile.label(), profile.diffuseTexture);
         return std::nullopt;
     }
     Match match {.color = *mean};
-    if (!sampled) {
-        // used as is
-    } else if (const auto game = TextureColor::meanColor(PROJECTED_DIFFUSE); game.has_value()) {
-        // Per channel ratio of the two averages; a channel the divisor has next to nothing in is
-        // left alone. No upper clamp: a dark ProjectedDiffuse legitimately needs a color above 1
-        // to land on the texture, and the product is what ends up on screen
-        const auto divide = [](float channel, float by) -> float { return by >= MIN_DIVISOR ? channel / by : channel; };
-        match.color = RE::NiColor {
-            divide(mean->red, game->red), divide(mean->green, game->green), divide(mean->blue, game->blue)};
-        spdlog::warn(
-            "Profile '{}': falling back to a color matched through the game's {}", profile.name, PROJECTED_DIFFUSE);
-    } else {
-        spdlog::warn("Profile '{}': neither texture could be used; its materials get the texture's average "
-                     "uncompensated",
-                     profile.name);
+    if (sampled) {
+        // The shader multiplies the color with the game's diffuse, so that one's average has to
+        // come out again: per channel ratio of the two averages, a channel the divisor has next
+        // to nothing in left alone. No upper clamp: a dark ProjectedDiffuse legitimately needs a
+        // color above 1 to land on the texture, and the product is what ends up on screen
+        if (const auto game = TextureColor::meanColor(ConfigLoader::GAME_DIFFUSE); game.has_value()) {
+            const auto divide
+                = [](float channel, float by) -> float { return by >= MIN_DIVISOR ? channel / by : channel; };
+            match.color = RE::NiColor {
+                divide(mean->red, game->red), divide(mean->green, game->green), divide(mean->blue, game->blue)};
+            spdlog::warn("Profile '{}': falling back to a color matched through the game's {}",
+                         profile.label(),
+                         ConfigLoader::GAME_DIFFUSE);
+        } else {
+            spdlog::warn("Profile '{}': neither texture could be used; its materials get the texture's average "
+                         "uncompensated",
+                         profile.label());
+        }
     }
     logged(match);
     return match;
@@ -312,12 +316,13 @@ auto MaterialMatcher::matchTextures(const ConfigLoader::Profile& profile) -> std
 
 auto MaterialMatcher::meanNoise(const std::string& dataPath) -> float
 {
-    const auto mean = TextureColor::meanColor(dataPath.empty() ? PROJECTED_NOISE : dataPath);
+    const auto mean = TextureColor::meanColor(dataPath.empty() ? ConfigLoader::GAME_NOISE : dataPath);
     if (!mean.has_value()) {
         spdlog::warn("...so roof shelter assumes the vanilla noise's average, {}", VANILLA_MEAN_NOISE);
         return VANILLA_MEAN_NOISE;
     }
-    spdlog::info("Coverage noise {} averages {:.3f}", dataPath.empty() ? PROJECTED_NOISE : dataPath.c_str(), mean->red);
+    spdlog::info(
+        "Coverage noise {} averages {:.3f}", dataPath.empty() ? ConfigLoader::GAME_NOISE : dataPath.c_str(), mean->red);
     return mean->red;
 }
 

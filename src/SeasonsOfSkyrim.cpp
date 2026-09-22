@@ -1,8 +1,9 @@
 #include "SeasonsOfSkyrim.hpp"
 
+#include "Text.hpp"
+
 #include "PCH.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <string_view>
 
@@ -12,12 +13,8 @@ auto SeasonsOfSkyrim::isLoaded() -> bool { return REX::W32::GetModuleHandleW(MOD
 
 auto SeasonsOfSkyrim::isSinglePassMaterial(std::string_view editorId) -> bool
 {
-    // EditorIDs are not case sensitive to the game, and ASCII
-    return std::ranges::equal(editorId, SINGLE_PASS_MATERIAL, [](char lhs, char rhs) -> bool {
-        const auto lower
-            = [](char ch) -> char { return (ch >= 'A' && ch <= 'Z') ? static_cast<char>(ch - 'A' + 'a') : ch; };
-        return lower(lhs) == lower(rhs);
-    });
+    // EditorIDs are not case sensitive to the game
+    return Text::toLower(editorId) == Text::toLower(SINGLE_PASS_MATERIAL);
 }
 
 auto SeasonsOfSkyrim::hasWinterSnow(const RE::NiAVObject& root) -> bool
