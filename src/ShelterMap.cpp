@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -211,6 +212,33 @@ auto ShelterMap::Field::depthUnderCover(const RE::NiPoint3& point,
     return std::max(std::sqrt(nearestSq) - HALF_SPACING, 0.0F);
 }
 
+auto ShelterMap::Field::distanceToCover(const RE::NiPoint3& point,
+                                        const Slope& slope,
+                                        float reach) const -> float
+{
+    const int nodeX = nearestNodeOf(point.x);
+    const int nodeY = nearestNodeOf(point.y);
+    constexpr float HALF_SPACING = K_SPACING * 0.5F;
+    const int radius = static_cast<int>(std::ceil((reach + HALF_SPACING) / K_SPACING));
+    float nearestSq = std::numeric_limits<float>::max();
+    for (int offsetY = -radius; offsetY <= radius; ++offsetY) {
+        for (int offsetX = -radius; offsetX <= radius; ++offsetX) {
+            const int columnX = nodeX + offsetX;
+            const int columnY = nodeY + offsetY;
+            if (topAt(columnX, columnY) <= ceilingAt(point, slope, columnX, columnY)) {
+                continue;
+            }
+            const float deltaX = (static_cast<float>(columnX) * K_SPACING) - point.x;
+            const float deltaY = (static_cast<float>(columnY) * K_SPACING) - point.y;
+            nearestSq = std::min(nearestSq, (deltaX * deltaX) + (deltaY * deltaY));
+        }
+    }
+    if (nearestSq == std::numeric_limits<float>::max()) {
+        return reach + K_SPACING; // nothing covered within the window: well clear of any cover
+    }
+    return std::max(std::sqrt(nearestSq) - HALF_SPACING, 0.0F);
+}
+
 auto ShelterMap::Field::measureOpenness(std::span<const RE::NiPoint3> positions,
                                         std::span<const RE::NiPoint3> normals,
                                         std::span<const std::uint16_t> indices,
@@ -295,33 +323,45 @@ auto ShelterMap::Field::measureOpenness(std::span<const RE::NiPoint3> positions,
     openness.swap(lowered);
 
     // Third step: put the snow edge where cover begins on every edge that crosses a drip line
-    const auto localize = [&](std::size_t covered, std::size_t open, const Slope& slope) -> void {
-        const RE::NiPoint3& from = positions[open];
-        const RE::NiPoint3& to = positions[covered];
-        const float deltaX = to.x - from.x;
-        const float deltaY = to.y - from.y;
-        const float deltaZ = to.z - from.z;
-        const float length = std::sqrt((deltaX * deltaX) + (deltaY * deltaY) + (deltaZ * deltaZ));
-        constexpr float MIN_EDGE_LENGTH = 1.0F; /**< Shorter is a doubled vertex, not a direction */
-        if (length <= MIN_EDGE_LENGTH) {
-            return;
-        }
-        // Fraction of the edge, measured from the open end, that lies in the open
-        float inTheOpen = 1.0F;
+    constexpr float MIN_EDGE_LENGTH = 1.0F; /**< Shorter is a doubled vertex, not a direction */
+    const auto edgeLength
+        = [&](std::size_t from, std::size_t to) -> float { return (positions[to] - positions[from]).Length(); };
+    // Fraction of an edge, measured from its first vertex, that lies in the open
+    const auto inTheOpen = [&](std::size_t from, std::size_t to, const Slope& slope) -> float {
+        const RE::NiPoint3& start = positions[from];
+        const RE::NiPoint3 delta = positions[to] - start;
         for (int sample = 1; sample <= K_EDGE_SAMPLES; ++sample) {
             const float fraction = static_cast<float>(sample) / static_cast<float>(K_EDGE_SAMPLES);
-            if (isCovered({from.x + (deltaX * fraction), from.y + (deltaY * fraction), from.z + (deltaZ * fraction)},
-                          slope)) {
-                inTheOpen = (static_cast<float>(sample) - 0.5F) / static_cast<float>(K_EDGE_SAMPLES);
-                break;
+            if (isCovered(start + (delta * fraction), slope)) {
+                return (static_cast<float>(sample) - 0.5F) / static_cast<float>(K_EDGE_SAMPLES);
             }
+        }
+        return 1.0F;
+    };
+
+    /**
+     * An edge whose covered end, even at 0, leaves the crossing beyond its target
+     */
+    struct Overrun {
+        std::size_t open;
+        std::size_t covered;
+        float target;
+    };
+    std::vector<Overrun> overruns;
+    const auto localize = [&](std::size_t covered, std::size_t open, const Slope& slope) -> void {
+        const float length = edgeLength(open, covered);
+        if (length <= MIN_EDGE_LENGTH) {
+            return;
         }
         // Interpolated openness runs from 1 at the open end to the covered vertex's value; it has
         // to pass edgeOpenness at the target fraction, which fixes that value
         constexpr float MIN_TARGET = 0.05F;
-        const float target = std::clamp(inTheOpen + (0.5F * fade / length), MIN_TARGET, 1.0F);
+        const float target = std::clamp(inTheOpen(open, covered, slope) + (0.5F * fade / length), MIN_TARGET, 1.0F);
         const float needed = 1.0F - ((1.0F - edgeOpenness) / target);
         openness[covered] = std::max(openness[covered], std::clamp(needed, 0.0F, 1.0F));
+        if (needed < 0.0F) {
+            overruns.push_back({.open = open, .covered = covered, .target = target});
+        }
     };
 
     for (std::size_t corner = 0; corner + 2 < indices.size(); corner += 3) {
@@ -336,6 +376,71 @@ auto ShelterMap::Field::measureOpenness(std::span<const RE::NiPoint3> positions,
                     localize(covered, open, slope);
                 }
             }
+        }
+    }
+    if (overruns.empty()) {
+        return true;
+    }
+
+    // Fourth step: an edge the third could not settle has one value left to move, the open end's.
+    // It is lowered so that the interpolation passes edgeOpenness at the target after all - but
+    // only where the open vertex stands on the drip line: along every edge from it the open
+    // surface stays within dripLineReach of cover, so what it thins is confined to a strip that
+    // wide along the eave. A vertex with an edge running away from cover is anchored in the open
+    // and keeps its snow, whatever a long edge under a roof asks of it; an edge running along an
+    // eave anchors nothing, its whole length being close to cover. An edge whose covered end is
+    // itself above edgeOpenness is snowy to that end and beyond the open end's reach.
+    const float dripLineReach = std::max(0.5F * fade, K_SPACING);
+    std::vector<float> wanted(positions.size(), 1.0F); // the lowest value any overrun asks of an open vertex
+    for (const auto& overrun : overruns) {
+        const float coveredEnd = openness[overrun.covered];
+        if (coveredEnd >= edgeOpenness) {
+            continue;
+        }
+        const float value = (edgeOpenness - (coveredEnd * overrun.target)) / (1.0F - overrun.target);
+        wanted[overrun.open] = std::min(wanted[overrun.open], std::clamp(value, 0.0F, 1.0F));
+    }
+    // Whether the open run of an edge, walked from its first vertex, gets farther than
+    // dripLineReach from any cover
+    const auto runsAwayFromCover = [&](std::size_t from, std::size_t to, const Slope& slope) -> bool {
+        const RE::NiPoint3& start = positions[from];
+        const RE::NiPoint3 delta = positions[to] - start;
+        for (int sample = 0; sample <= K_EDGE_SAMPLES; ++sample) {
+            const RE::NiPoint3 point
+                = start + (delta * (static_cast<float>(sample) / static_cast<float>(K_EDGE_SAMPLES)));
+            if (isCovered(point, slope)) {
+                return false; // the rest of the edge lies under cover
+            }
+            if (distanceToCover(point, slope, dripLineReach) > dripLineReach) {
+                return true;
+            }
+        }
+        return false;
+    };
+    std::vector<bool> anchored(positions.size());
+    for (std::size_t corner = 0; corner + 2 < indices.size(); corner += 3) {
+        const std::array<std::size_t, 3> triangle {indices[corner], indices[corner + 1], indices[corner + 2]};
+        if (!isTriangle(triangle)
+            || (wanted[triangle[0]] >= 1.0F && wanted[triangle[1]] >= 1.0F && wanted[triangle[2]] >= 1.0F)) {
+            continue;
+        }
+        const Slope slope = Slope::ofTriangle(positions[triangle[0]], positions[triangle[1]], positions[triangle[2]]);
+        for (const std::size_t vertex : triangle) {
+            if (wanted[vertex] >= 1.0F || anchored[vertex]) {
+                continue;
+            }
+            for (const std::size_t other : triangle) {
+                if (other != vertex && edgeLength(vertex, other) > MIN_EDGE_LENGTH
+                    && runsAwayFromCover(vertex, other, slope)) {
+                    anchored[vertex] = true;
+                    break;
+                }
+            }
+        }
+    }
+    for (std::size_t index = 0; index < positions.size(); ++index) {
+        if (wanted[index] < 1.0F && !anchored[index]) {
+            openness[index] = std::min(openness[index], wanted[index]);
         }
     }
     return true;

@@ -147,7 +147,10 @@ private:
     constexpr static const char* DEFAULT_ASH_PATTERN_LOD = "ashlodmaterial*"; /**< AshLODMaterialMtns1P */
 
     constexpr static float DEFAULT_SHELTER_FADE = 96.0F; /**< About how far wind carries snow in under an eave */
-    constexpr static float MAX_SHELTER_FADE = 512.0F; /**< Every covered vertex searches this far for open sky */
+    constexpr static float MAX_SHELTER_FADE = 128.0F; /**< The shelter mask has been checked over 0 to 128 (0 a hard
+                                                        edge, 32 and 96 in game); every covered vertex searches
+                                                        this far for open sky, and past it the open vertices the
+                                                        mask may thin lie farther from an eave than looks right */
 
     static inline std::vector<Profile> s_profiles; /**< In file name order */
 

@@ -119,7 +119,7 @@ public:
         /**
          * @brief Per vertex openness (1 in the open .. 0 deep under cover) of one mesh
          *
-         * Three steps. Every vertex first gets the openness of its own spot: 1 in the open,
+         * Four steps. Every vertex first gets the openness of its own spot: 1 in the open,
          * falling to 0 over the fade distance under cover. That alone is only right where the
          * mesh is fine enough to follow the fade, and game meshes are not - a stair flight is
          * two rows of vertices, a porch plank has one at either end, a covered walkway's floor
@@ -140,8 +140,20 @@ public:
          * The third step walks every triangle edge that joins an open and a covered vertex,
          * finds where along it cover actually begins, and raises the covered vertex's openness
          * just enough that the interpolated value crosses edgeOpenness there (half a fade past
-         * the drip line) rather than somewhere out in the open. It runs last, so whatever the
-         * second step took from a vertex next to the open, the drip line on that edge stays put.
+         * the drip line) rather than somewhere out in the open. It runs after the second, so
+         * whatever that took from a vertex next to the open, the drip line on that edge stays put.
+         *
+         * Raising has a floor. A porch plank whose far end is deep under the roof and whose near
+         * end pokes a hand's width past the eave interpolates from 1 to 0 over its whole length,
+         * and the snow reaches two thirds of the way in - while the plank next to it, whose near
+         * end sits a few units inside the eave and was lowered, is bare: a strip of snow on one
+         * plank. So the fourth step lowers the open end of such an edge instead, just enough for
+         * the crossing to land where the third step wanted it. Only an open vertex standing on
+         * the drip line is touched: along every edge from it, the open surface stays within half
+         * a fade (or a spacing) of cover, so what it thins is a strip that wide along the eave.
+         * A vertex with an edge running away from cover - a courtyard corner, a plank end well
+         * clear of the roof - is anchored in the open and keeps its snow. Edges running along an
+         * eave do not anchor: their whole length is close to cover.
          *
          * @param positions World space vertex positions
          * @param normals World space vertex normals, one per position, or empty for a mesh
@@ -203,6 +215,21 @@ public:
          *         reach less that half spacing and never below 0
          */
         [[nodiscard]] auto depthUnderCover(const RE::NiPoint3& point,
+                                           const Slope& slope,
+                                           float reach) const -> float;
+
+        /**
+         * @brief How far a world space point in the open is from cover: the drip line seen from
+         * outside, the counterpart of depthUnderCover
+         *
+         * @param point The point, taken to be in the open
+         * @param slope The tilt of the surface the point lies on
+         * @param reach The farthest distance worth telling apart
+         * @return float The distance to the nearest lattice column that is covered at the
+         *         point's height, less half a spacing, never below 0; more than reach when no such
+         *         column lies within it
+         */
+        [[nodiscard]] auto distanceToCover(const RE::NiPoint3& point,
                                            const Slope& slope,
                                            float reach) const -> float;
     };
