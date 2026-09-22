@@ -18,10 +18,11 @@ namespace XPMF {
  * Snow falls straight down, and the single pass projection is straight down too, so whether
  * a point is sheltered is a question about the column above it: is any surface higher up? That
  * makes the whole scene reducible to one number per column - the height of its topmost
- * surface - which is what these maps hold, sampled on a lattice of K_SPACING units. A point
- * at height z is under cover where the top surface is more than K_CLEARANCE above it, and in
- * the open where it is not (which includes a roof's own top side, and a wall right next to a
- * point: a taller neighbor column blocks nothing above).
+ * surface - which is what these maps hold, sampled on a lattice of K_SPACING units. A point is
+ * under cover where the lattice node nearest to it tops out more than K_CLEARANCE above the
+ * surface the point lies on, and that node sits in a block of four that all do (see
+ * Field::isCovered); it is in the open where not, which includes a roof's own top side and
+ * the foot of a wall (a taller neighbor column blocks nothing above).
  *
  * The maps are rasterized from the triangles the game renders (the CPU copies it keeps for its
  * decal builder), not from collision: what shelters is exactly what can be seen sheltering, a
@@ -45,8 +46,9 @@ public:
     constexpr static int K_BLOCK_CELLS = K_BLOCK * K_BLOCK; /**< Cells in a block, row major */
     constexpr static std::size_t K_BLOCK_CENTER = K_BLOCK_CELLS / 2; /**< The block's middle cell */
     constexpr static float K_CLEARANCE = 24.0F; /**< How far above a point a surface must be to shelter it: more
-                                                   than the lattice can misjudge a surface the point itself
-                                                   lies on, less than any roof a snowed-on thing fits under */
+                                                   than a curved surface the point itself lies on can rise within
+                                                   half a spacing of it, less than any roof a snowed-on thing
+                                                   fits under */
     constexpr static float K_NOTHING = std::numeric_limits<float>::lowest(); /**< Node no triangle covers */
     constexpr static int K_EDGE_SAMPLES = 12; /**< Points tested along a triangle edge that crosses a drip line */
 
@@ -77,6 +79,35 @@ public:
                           const RE::NiPoint3& third);
 
     /**
+     * @brief The tilt of the surface a point lies on: how much higher that surface runs per unit
+     * east and per unit north of the point
+     *
+     * The lattice is read next to a point, never at it, and on the point's own surface a node
+     * uphill reads higher than the point - on a steep roof by more than K_CLEARANCE, which would
+     * let the roof shelter itself. With the tilt known, every node is compared with where the
+     * point's surface passes that node instead of with the point's own height.
+     */
+    struct Slope {
+        float dzdx {}; /**< Rise per unit of x; 0 on a flat surface */
+        float dzdy {}; /**< Rise per unit of y */
+
+        /**
+         * @brief The slope of the surface a world space normal stands on
+         *
+         * Flat for a normal that is nearly horizontal: a wall holds no snow, and the plane of one
+         * says nothing about the columns next to it.
+         */
+        [[nodiscard]] static auto of(const RE::NiPoint3& normal) -> Slope;
+
+        /**
+         * @brief The slope of a world space triangle; flat for a degenerate one
+         */
+        [[nodiscard]] static auto ofTriangle(const RE::NiPoint3& first,
+                                             const RE::NiPoint3& second,
+                                             const RE::NiPoint3& third) -> Slope;
+    };
+
+    /**
      * @brief The 3x3 block of finished maps around a cell, immutable and safe to read on the worker
      */
     struct Field {
@@ -88,25 +119,41 @@ public:
         /**
          * @brief Per vertex openness (1 in the open .. 0 deep under cover) of one mesh
          *
-         * Two steps. Every vertex first gets the openness of its own spot: 1 in the open,
-         * falling to 0 over the fade distance under cover. That alone is only
-         * right where the mesh is fine enough to follow the fade, and game meshes are not - a
-         * stair flight is two rows of vertices, a porch plank has one at either end - so a
-         * covered vertex would drag the interpolated value down along the whole triangle and
-         * strip snow that lies in the open. The second step therefore walks every triangle
-         * edge that joins an open and a covered vertex, finds where along it cover actually
-         * begins, and raises the covered vertex's openness just enough that the interpolated
-         * value crosses edgeOpenness there (half a fade past the drip line) rather than
-         * somewhere out in the open.
+         * Three steps. Every vertex first gets the openness of its own spot: 1 in the open,
+         * falling to 0 over the fade distance under cover. That alone is only right where the
+         * mesh is fine enough to follow the fade, and game meshes are not - a stair flight is
+         * two rows of vertices, a porch plank has one at either end, a covered walkway's floor
+         * is one polygon with every vertex on its rim - and a vertex value is wrong in both
+         * directions on such a mesh. A covered vertex would drag the interpolated value down
+         * along the whole triangle and strip snow that lies in the open; and a triangle whose
+         * corners all sit a hand's width under an eave, but whose middle lies deep under the
+         * roof, would keep its snow throughout, because nothing ever looks at the middle.
+         *
+         * So the second step looks at the middle: at the centroid and the edge midpoints of
+         * every triangle that has a covered corner, the openness the corners interpolate to is
+         * compared with the openness of that spot, and where the interpolation comes out too
+         * open the covered corners are lowered just enough to close the gap (the excess spread
+         * over them in proportion to their weight there; a corner ends at the lowest value any
+         * probe asked of it). Open corners are never touched, so a triangle that is mostly in
+         * the open keeps its snow there.
+         *
+         * The third step walks every triangle edge that joins an open and a covered vertex,
+         * finds where along it cover actually begins, and raises the covered vertex's openness
+         * just enough that the interpolated value crosses edgeOpenness there (half a fade past
+         * the drip line) rather than somewhere out in the open. It runs last, so whatever the
+         * second step took from a vertex next to the open, the drip line on that edge stays put.
          *
          * @param positions World space vertex positions
-         * @param indices The mesh's triangle list; empty skips the second step
+         * @param normals World space vertex normals, one per position, or empty for a mesh
+         *        without them (every vertex is then read as lying on a flat surface)
+         * @param indices The mesh's triangle list; empty skips the second and third steps
          * @param fade World units under cover over which openness falls to 0
          * @param edgeOpenness Openness at which snow visibly ends on the mesh's material
          * @param openness Out: one value per position
          * @return bool Whether any vertex is under cover
          */
         [[nodiscard]] auto measureOpenness(std::span<const RE::NiPoint3> positions,
+                                           std::span<const RE::NiPoint3> normals,
                                            std::span<const std::uint16_t> indices,
                                            float fade,
                                            float edgeOpenness,
@@ -120,18 +167,35 @@ public:
                                  int nodeY) const -> float;
 
         /**
+         * @brief The height a column has to top out above to shelter a point: where the point's
+         * own surface passes the column, plus K_CLEARANCE
+         */
+        [[nodiscard]] static auto ceilingAt(const RE::NiPoint3& point,
+                                            const Slope& slope,
+                                            int nodeX,
+                                            int nodeY) -> float;
+
+        /**
          * @brief Whether a world space point has something overhead
          *
-         * Under cover only when all four lattice columns around the point top out more than
-         * K_CLEARANCE above it: interpolating across the foot of a wall would otherwise put a
-         * snow-free band along every vertical surface.
+         * Under cover when the lattice node nearest to the point tops out above the point's
+         * ceiling and belongs to a block of four nodes that all do. The nearest node alone
+         * puts a roof's edge where it is to within half a spacing, either way; the block is
+         * what keeps a rope, a beam or a railing - anything a single node wide - from
+         * sheltering what lies under it, and the foot of a wall in the open: the columns
+         * inside the wall top out high, but a point next to it is nearest to one that does not.
+         *
+         * @param slope The tilt of the surface the point lies on, so that the surface itself
+         *        is never read as cover
          */
-        [[nodiscard]] auto isCovered(const RE::NiPoint3& point) const -> bool;
+        [[nodiscard]] auto isCovered(const RE::NiPoint3& point,
+                                     const Slope& slope) const -> bool;
 
         /**
          * @brief How far inside cover a world space point is
          *
          * @param point The point
+         * @param slope The tilt of the surface the point lies on
          * @param reach The farthest distance worth reporting (the fade distance plus a spacing)
          * @return float 0 in the open; otherwise the distance to the nearest lattice column that
          *         is open at the point's height, less half a spacing (the drip line runs
@@ -139,6 +203,7 @@ public:
          *         reach less that half spacing and never below 0
          */
         [[nodiscard]] auto depthUnderCover(const RE::NiPoint3& point,
+                                           const Slope& slope,
                                            float reach) const -> float;
     };
 
@@ -208,9 +273,9 @@ public:
 
 private:
     /**
-     * @brief The lattice node a world coordinate falls in, on one axis
+     * @brief The lattice node nearest to a world coordinate, on one axis
      */
-    [[nodiscard]] static auto nodeOf(float coordinate) -> int;
+    [[nodiscard]] static auto nearestNodeOf(float coordinate) -> int;
 };
 
 } // namespace XPMF

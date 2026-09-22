@@ -1197,6 +1197,7 @@ auto ProjectedGeometry::run(RasterJob& job) -> RasterResult
 auto ProjectedGeometry::measureOpenness(const Receiver& receiver,
                                         const ShelterMap::Field& field,
                                         const VertexLayout& layout,
+                                        std::span<const RE::NiPoint3> normals,
                                         float edgeOpenness,
                                         std::vector<RE::NiPoint3>& positions,
                                         std::vector<float>& openness) -> bool
@@ -1216,7 +1217,7 @@ auto ProjectedGeometry::measureOpenness(const Receiver& receiver,
     if (source.rawIndexData != nullptr) {
         indices = {source.rawIndexData, static_cast<std::size_t>(receiver.shape.triangleCount) * 3};
     }
-    return field.measureOpenness(positions, indices, receiver.fade, edgeOpenness, openness);
+    return field.measureOpenness(positions, normals, indices, receiver.fade, edgeOpenness, openness);
 }
 
 auto ProjectedGeometry::run(ReceiverJob& job) -> ReceiverResult
@@ -1229,6 +1230,7 @@ auto ProjectedGeometry::run(ReceiverJob& job) -> ReceiverResult
     result.epoch = job.epoch;
 
     std::vector<RE::NiPoint3> positions;
+    std::vector<RE::NiPoint3> normals;
     std::vector<float> openness;
     std::vector<float> facing;
     std::vector<std::uint8_t> alpha;
@@ -1246,9 +1248,15 @@ auto ProjectedGeometry::run(ReceiverJob& job) -> ReceiverResult
             return vertices.subspan(static_cast<std::size_t>(index) * layout->stride, layout->stride);
         };
 
-        // World up as the model sees it: the last row of the rotation
-        const auto& rotate = receiver.world.rotate;
-        const RE::NiPoint3 up {rotate.entry[2][0], rotate.entry[2][1], rotate.entry[2][2]};
+        // World space normals: the rotation alone, a NiTransform scaling uniformly. Their z is how
+        // far up a vertex faces; their tilt is what the shelter map reads its own surface by
+        normals.clear();
+        if (layout->hasNormals) {
+            normals.resize(vertexCount);
+            for (std::uint32_t index = 0; index < vertexCount; ++index) {
+                normals[index] = receiver.world.rotate * layout->normal(vertexAt(index));
+            }
+        }
 
         // Alpha only means something relative to what the shader compares it with. A surface
         // facing up by `facing` has just lost its snow at alpha = (threshold + K_BLEND_FLOOR) /
@@ -1272,13 +1280,13 @@ auto ProjectedGeometry::run(ReceiverJob& job) -> ReceiverResult
 
         facing.resize(vertexCount);
         for (std::uint32_t index = 0; index < vertexCount; ++index) {
-            facing[index] = layout->hasNormals ? up.Dot(layout->normal(vertexAt(index))) : 1.0F;
+            facing[index] = layout->hasNormals ? normals[index].z : 1.0F;
         }
 
         // A vertex holds snow if it could show any with nothing overhead
         const float holdsSnowFrom = std::max(receiver.threshold + K_BLEND_FLOOR, MIN_UP);
         auto verdict = ShelterMap::Verdict::OPEN;
-        if (shelter && measureOpenness(receiver, job.field, *layout, edgeOpenness, positions, openness)) {
+        if (shelter && measureOpenness(receiver, job.field, *layout, normals, edgeOpenness, positions, openness)) {
             verdict = ShelterMap::judge(ShelterMap::tally(openness, facing, holdsSnowFrom, edgeOpenness),
                                         !receiver.shape.keepAlpha);
         }

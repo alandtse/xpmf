@@ -17,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -442,6 +443,7 @@ private:
      * @brief Per vertex openness of one receiver: its vertices put into world space and handed to
      * ShelterMap::Field::measureOpenness, which has the details
      *
+     * @param normals World space vertex normals, or empty for a mesh without them
      * @param edgeOpenness Openness at which snow visibly ends on a flat surface of this static
      * @param positions Scratch buffer for the world space positions
      * @param openness Out: the result
@@ -450,6 +452,7 @@ private:
     [[nodiscard]] static auto measureOpenness(const Receiver& receiver,
                                               const ShelterMap::Field& field,
                                               const VertexLayout& layout,
+                                              std::span<const RE::NiPoint3> normals,
                                               float edgeOpenness,
                                               std::vector<RE::NiPoint3>& positions,
                                               std::vector<float>& openness) -> bool;
