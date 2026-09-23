@@ -48,7 +48,7 @@ public:
      * @brief One profile: which material objects, and what is done for them
      *
      * The settings fall into the plugin's three independent parts - patching the material
-     * (patchMaterial, the four textures, isSnow and the three falloff values), neutralizeVertexColors,
+     * (patchMaterial, the four textures, isSnow, the three falloff values and maxAngle), neutralizeVertexColors,
      * and the vertex alpha (neutralizeVertexAlpha, roofShelter with shelterFade) - and any combination
      * of them works. Each of the three geometry settings comes with a skip list: wildcard patterns
      * over the EditorIDs of the statics (base records) it is not applied to.
@@ -89,6 +89,12 @@ public:
                                               the projected textures at a fixed ratio to it, of the profile's
                                               textures. 20 to 1500 on the vanilla materials; above 0, the engine
                                               divides by it */
+        std::optional<float> maxAngle; /**< The one value the path reads that is the static's rather than the
+                                          material's: the DNAM max angle, in degrees, of every static carrying one
+                                          of the profile's patched material objects; the projection needs
+                                          dot(normal, up) above cos(angle) before the noise has its say. 30 to 120
+                                          in vanilla (the Creation Kit's "30-90" is a hint: Nordic ruins and word
+                                          walls sit at 120); std::nullopt = each static's own */
 
         bool neutralizeVertexColors {}; /**< Whether shapes that carry the projection get white vertex colors */
         std::vector<std::string> neutralizeVertexColorsSkip; /**< Lower case wildcard patterns (* and ?) over the
@@ -199,6 +205,8 @@ private:
                                                                      projection is in its way */
     constexpr static bool DEFAULT_ROOF_SHELTER = true;
     constexpr static float DEFAULT_SHELTER_FADE = 64.0F; /**< About how far wind carries snow in under an eave */
+    constexpr static double MAX_ANGLE_LIMIT = 180.0; /**< cos(angle) is what the shader compares with; at 180 every
+                                                        face is covered and past it there is nothing to say */
     constexpr static float MAX_SHELTER_FADE = 128.0F; /**< The shelter mask has been checked over 0 to 128 (0 a hard
                                                         edge, 32 and 96 in game); every covered vertex searches
                                                         this far for open sky, and past it the open vertices the

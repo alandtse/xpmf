@@ -13,6 +13,7 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <format>
 #include <optional>
@@ -240,6 +241,51 @@ void MaterialMatcher::onDataLoaded()
                      untouched.size(),
                      leftPbr,
                      leftMultipass);
+    }
+
+    // The max angle is the static's rather than the material's (DNAM), and Clone3D reads it from
+    // the static: a profile that gives one has it written into every static that carries one of its
+    // patched materials
+    std::unordered_map<const RE::BGSMaterialObject*, const ConfigLoader::Profile*> angled;
+    for (const auto& [material, treatment] : materials) {
+        if (!treatment.untouched && treatment.profile->maxAngle.has_value()) {
+            angled.emplace(material, treatment.profile);
+        }
+    }
+    if (!angled.empty()) {
+        struct Angled {
+            std::size_t statics {};
+            float lowest {}; /**< The angles the statics had */
+            float highest {};
+        };
+        std::unordered_map<const ConfigLoader::Profile*, Angled> report;
+        for (auto* const stat : dataHandler->GetFormArray<RE::TESObjectSTAT>()) {
+            const auto found = stat != nullptr ? angled.find(stat->data.materialObj) : angled.end();
+            if (found == angled.end()) {
+                continue;
+            }
+            auto& tally = report[found->second];
+            const float before = stat->data.materialThresholdAngle;
+            tally.lowest = tally.statics == 0 ? before : std::min(tally.lowest, before);
+            tally.highest = tally.statics == 0 ? before : std::max(tally.highest, before);
+            ++tally.statics;
+            stat->data.materialThresholdAngle = *found->second->maxAngle;
+        }
+        for (const auto& profile : ConfigLoader::getProfiles()) {
+            if (!profile.maxAngle.has_value()) {
+                continue;
+            }
+            if (const auto found = report.find(&profile); found != report.end()) {
+                spdlog::info("Profile '{}': max angle {:g} on {} statics (their own ran from {:g} to {:g})",
+                             profile.label(),
+                             *profile.maxAngle,
+                             found->second.statics,
+                             found->second.lowest,
+                             found->second.highest);
+            } else {
+                spdlog::info("Profile '{}': max angle {:g} reaches no static", profile.label(), *profile.maxAngle);
+            }
+        }
     }
 
     // Everything above changed what a projection looks like; this changes which vertices it looks

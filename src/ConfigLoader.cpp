@@ -213,6 +213,25 @@ public:
     }
 
     /**
+     * @brief A number in a range, or "no opinion" for null or a key left out
+     */
+    [[nodiscard]] auto optionalNumberBetween(const char* key,
+                                             double lowest,
+                                             double highest) -> std::optional<float>
+    {
+        const auto* const value = find(key, false);
+        if (value == nullptr || value->is_null()) {
+            return std::nullopt;
+        }
+        const double parsed = value->is_number() ? value->get<double>() : std::nan("");
+        if (!(parsed >= lowest && parsed <= highest)) {
+            return wrong<std::optional<float>>(
+                key, std::format("a number from {} to {}, null, or left out", lowest, highest));
+        }
+        return static_cast<float>(parsed);
+    }
+
+    /**
      * @brief A string that says something: blank is a problem (a name)
      */
     [[nodiscard]] auto string(const char* key) -> std::string
@@ -420,6 +439,9 @@ void ConfigLoader::loadConfig()
             profile.falloffScale = fields.optionalNumber("falloffScale");
             profile.falloffBias = fields.optionalNumber("falloffBias");
             profile.noiseUVScale = fields.optionalNumber("noiseUVScale", 0.0);
+            // The static's angle, the fourth value the single pass path reads: written into the
+            // statics themselves (MaterialMatcher)
+            profile.maxAngle = fields.optionalNumberBetween("maxAngle", 0.0, MAX_ANGLE_LIMIT);
             // The three geometry settings, each with the statics it is not applied to
             const auto patterns = [&](const char* key) -> std::vector<std::string> {
                 std::vector<std::string> lowered;
@@ -484,6 +506,9 @@ void ConfigLoader::loadConfig()
                 if (profile.noiseUVScale.has_value()) {
                     given.emplace_back("\"noiseUVScale\"");
                 }
+                if (profile.maxAngle.has_value()) {
+                    given.emplace_back("\"maxAngle\"");
+                }
                 if (!given.empty()) {
                     spdlog::warn("{}: \"patchMaterial\" is off, so {} {} nothing",
                                  path.filename().string(),
@@ -494,6 +519,7 @@ void ConfigLoader::loadConfig()
                 profile.falloffScale.reset();
                 profile.falloffBias.reset();
                 profile.noiseUVScale.reset();
+                profile.maxAngle.reset();
             }
             s_profiles.push_back(std::move(profile));
         }
@@ -545,6 +571,7 @@ void ConfigLoader::loadConfig()
         spdlog::info("Config Loaded: [{}] Falloff Scale: {}", profile.name, orRecord(profile.falloffScale));
         spdlog::info("Config Loaded: [{}] Falloff Bias: {}", profile.name, orRecord(profile.falloffBias));
         spdlog::info("Config Loaded: [{}] Noise UV Scale: {}", profile.name, orRecord(profile.noiseUVScale));
+        spdlog::info("Config Loaded: [{}] Max Angle: {}", profile.name, orRecord(profile.maxAngle));
         spdlog::info("Config Loaded: [{}] Neutralize Vertex Colors: {}", profile.name, profile.neutralizeVertexColors);
         spdlog::info("Config Loaded: [{}] Neutralize Vertex Colors Skip: {}",
                      profile.name,
