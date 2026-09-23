@@ -10,7 +10,6 @@
     "patchMaterial": true,
     "diffuseTexture": "textures/dlc02/landscape/volcanic_ash_01.dds",
     "normalTexture": "textures/dlc02/landscape/volcanic_ash_01_n.dds",
-    "isSnow": false,
     "neutralizeVertexColors": true,
     "neutralizeVertexAlpha": true,
     "neutralizeVertexAlphaSkip": [],

@@ -8,7 +8,6 @@
     "patchMaterial": true,
     "diffuseTexture": "textures/landscape/snow01.dds",
     "normalTexture": "textures/landscape/snow01_n.dds",
-    "isSnow": true,
     "neutralizeVertexColors": true,
     "neutralizeVertexAlpha": true,
     "neutralizeVertexAlphaSkip": [
