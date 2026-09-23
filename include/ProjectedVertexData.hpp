@@ -29,12 +29,12 @@ namespace XPMF {
  *
  * Most shapes with a projection on them share one variant per model and profile setting: white
  * colors (a profile's neutralizeVertexColors), and the alpha either as the mesh has it - a mask
- * its author painted stays a mask - or reset to 1 (neutralizeVertexAlpha, unless the static is one
- * the profile's neutralizeVertexAlphaSkip names), the projection then covering the whole shape. Only
- * a shape partly under cover gets a private variant, because only there does the alpha depend
- * on where the instance stands: whichever of the two it starts from, multiplied down towards
- * nothing where the cover is deep; one entirely under cover gets no variant at all - its
- * projection is switched off and it goes back to the model's own data (see ProjectedGeometry).
+ * its author painted stays a mask - or reset to 1 (neutralizeVertexAlpha), the projection then
+ * covering the whole shape; each setting except on the statics its skip list names (see
+ * ProjectedGeometry). Only a shape partly under cover gets a private variant, because only
+ * there does the alpha depend on where the instance stands: whichever of the two it starts
+ * from, multiplied down towards nothing where the cover is deep; one entirely under cover gets
+ * no variant at all - its projection is switched off and it goes back to the model's own data.
  *
  * Whitening is all or nothing per shape. Which vertices end up under snow depends on the
  * instance's orientation, the static's angle, the material and the noise, and guessing at that
@@ -69,12 +69,13 @@ public:
                               alpha instead, see ProjectedGeometry::scaledAlphaThreshold), and neither is one
                               with the Vertex_Alpha shader flag and no alpha property: the flag alone shows
                               nothing through */
-        bool neutralize {}; /**< The profile's neutralizeVertexColors: colors the shader shows become white */
-        bool shelter {}; /**< The profile's roofShelter: whether cover is measured for the shape at all */
-        bool neutralizeAlpha {}; /**< The profile's neutralizeVertexAlpha, for a static its
-                                    neutralizeVertexAlphaSkip does not name: the alpha starts from 1 rather
-                                    than from the mesh's own - on a shape that shows its colors and whose
-                                    alpha is not transparency (keepAlpha) */
+        // The profile's three geometry settings, each for a static its skip list does not name
+        // (ProjectedGeometry::settingsOf)
+        bool neutralize {}; /**< neutralizeVertexColors: colors the shader shows become white */
+        bool shelter {}; /**< roofShelter: whether cover is measured for the shape at all */
+        bool neutralizeAlpha {}; /**< neutralizeVertexAlpha: the alpha starts from 1 rather than from the mesh's
+                                    own - on a shape that shows its colors and whose alpha is not transparency
+                                    (keepAlpha) */
     };
 
     /**

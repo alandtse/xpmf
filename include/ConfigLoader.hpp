@@ -49,8 +49,9 @@ public:
      *
      * The settings fall into the plugin's three independent parts - patching the material
      * (patchMaterial, the four textures, isSnow and the three falloff values), neutralizeVertexColors,
-     * and the vertex alpha (neutralizeVertexAlpha with neutralizeVertexAlphaSkip, roofShelter with shelterFade)
-     * - and any combination of them works.
+     * and the vertex alpha (neutralizeVertexAlpha, roofShelter with shelterFade) - and any combination
+     * of them works. Each of the three geometry settings comes with a skip list: wildcard patterns
+     * over the EditorIDs of the statics (base records) it is not applied to.
      */
     struct Profile {
         std::string name; /**< For the log */
@@ -88,6 +89,9 @@ public:
                                               divides by it */
 
         bool neutralizeVertexColors {}; /**< Whether shapes that carry the projection get white vertex colors */
+        std::vector<std::string> neutralizeVertexColorsSkip; /**< Lower case wildcard patterns (* and ?) over the
+                                                                EditorIDs of the statics whose shapes keep the
+                                                                mesh's colors all the same; none by default */
 
         // Vertex alpha scales the projection (see ProjectedVertexData): what the shapes start from,
         // and whether the roof shelter then multiplies it down
@@ -95,12 +99,12 @@ public:
                                           - a mask the mesh's author painted against the game's own projection is
                                           discarded - rather than from the mesh's own. Never on a shape whose alpha
                                           is transparency */
-        std::vector<std::string> neutralizeVertexAlphaSkip; /**< Lower case wildcard patterns (* and ?) over the
-                                                               EditorIDs of the statics (base records) whose
-                                                               shapes keep the mesh's alpha all the same; none
-                                                               by default */
+        std::vector<std::string> neutralizeVertexAlphaSkip; /**< Same, for the statics whose shapes keep the
+                                                               mesh's alpha */
         bool roofShelter {}; /**< Whether vertex alpha is multiplied down to keep the projection out from under
                                 cover */
+        std::vector<std::string> roofShelterSkip; /**< Same, for the statics whose shapes stay covered under a
+                                                     roof */
         float shelterFade {}; /**< World units over which it fades out under cover */
 
         /**

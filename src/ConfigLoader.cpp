@@ -420,12 +420,20 @@ void ConfigLoader::loadConfig()
             profile.falloffScale = fields.optionalNumber("falloffScale");
             profile.falloffBias = fields.optionalNumber("falloffBias");
             profile.noiseUVScale = fields.optionalNumber("noiseUVScale", 0.0);
+            // The three geometry settings, each with the statics it is not applied to
+            const auto patterns = [&](const char* key) -> std::vector<std::string> {
+                std::vector<std::string> lowered;
+                for (const auto& pattern : fields.strings(key, false)) {
+                    lowered.push_back(Text::toLower(toGameCodePage(pattern)));
+                }
+                return lowered;
+            };
             profile.neutralizeVertexColors = fields.boolean("neutralizeVertexColors", DEFAULT_NEUTRALIZE_VERTEX_COLORS);
+            profile.neutralizeVertexColorsSkip = patterns("neutralizeVertexColorsSkip");
             profile.neutralizeVertexAlpha = fields.boolean("neutralizeVertexAlpha", DEFAULT_NEUTRALIZE_VERTEX_ALPHA);
-            for (const auto& pattern : fields.strings("neutralizeVertexAlphaSkip", false)) {
-                profile.neutralizeVertexAlphaSkip.push_back(Text::toLower(toGameCodePage(pattern)));
-            }
+            profile.neutralizeVertexAlphaSkip = patterns("neutralizeVertexAlphaSkip");
             profile.roofShelter = fields.boolean("roofShelter", DEFAULT_ROOF_SHELTER);
+            profile.roofShelterSkip = patterns("roofShelterSkip");
             profile.shelterFade = fields.number("shelterFade", 0.0F, MAX_SHELTER_FADE, DEFAULT_SHELTER_FADE);
             // The shelter used to be able to replace the mesh's alpha instead of multiplying it;
             // starting from 1 is neutralizeVertexAlpha's job now, shelter or no shelter
@@ -441,12 +449,24 @@ void ConfigLoader::loadConfig()
                 spdlog::warn("{}: \"editorIds\" is empty, so the profile matches no material object",
                              path.filename().string());
             }
-            if (!profile.neutralizeVertexAlpha && !profile.neutralizeVertexAlphaSkip.empty()) {
-                spdlog::warn(
-                    "{}: \"neutralizeVertexAlphaSkip\" names statics, but \"neutralizeVertexAlpha\" is off, so it "
-                    "does nothing",
-                    path.filename().string());
-            }
+            // A skip list without its setting names statics nothing would be done to anyway
+            const auto idle = [&](const char* skipKey, const char* settingKey, bool setting, const auto& skip) -> void {
+                if (!setting && !skip.empty()) {
+                    spdlog::warn("{}: \"{}\" names statics, but \"{}\" is off, so it does nothing",
+                                 path.filename().string(),
+                                 skipKey,
+                                 settingKey);
+                }
+            };
+            idle("neutralizeVertexColorsSkip",
+                 "neutralizeVertexColors",
+                 profile.neutralizeVertexColors,
+                 profile.neutralizeVertexColorsSkip);
+            idle("neutralizeVertexAlphaSkip",
+                 "neutralizeVertexAlpha",
+                 profile.neutralizeVertexAlpha,
+                 profile.neutralizeVertexAlphaSkip);
+            idle("roofShelterSkip", "roofShelter", profile.roofShelter, profile.roofShelterSkip);
             s_profiles.push_back(std::move(profile));
         }
         if (s_profiles.empty()) {
@@ -498,11 +518,15 @@ void ConfigLoader::loadConfig()
         spdlog::info("Config Loaded: [{}] Falloff Bias: {}", profile.name, orRecord(profile.falloffBias));
         spdlog::info("Config Loaded: [{}] Noise UV Scale: {}", profile.name, orRecord(profile.noiseUVScale));
         spdlog::info("Config Loaded: [{}] Neutralize Vertex Colors: {}", profile.name, profile.neutralizeVertexColors);
+        spdlog::info("Config Loaded: [{}] Neutralize Vertex Colors Skip: {}",
+                     profile.name,
+                     joinList(profile.neutralizeVertexColorsSkip));
         spdlog::info("Config Loaded: [{}] Neutralize Vertex Alpha: {}", profile.name, profile.neutralizeVertexAlpha);
         spdlog::info("Config Loaded: [{}] Neutralize Vertex Alpha Skip: {}",
                      profile.name,
                      joinList(profile.neutralizeVertexAlphaSkip));
         spdlog::info("Config Loaded: [{}] Roof Shelter: {}", profile.name, profile.roofShelter);
+        spdlog::info("Config Loaded: [{}] Roof Shelter Skip: {}", profile.name, joinList(profile.roofShelterSkip));
         spdlog::info("Config Loaded: [{}] Shelter Fade: {}", profile.name, profile.shelterFade);
     }
 }

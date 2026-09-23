@@ -12,7 +12,6 @@
     "normalTexture": "textures/dlc02/landscape/volcanic_ash_01_n.dds",
     "neutralizeVertexColors": true,
     "neutralizeVertexAlpha": true,
-    "neutralizeVertexAlphaSkip": [],
     "roofShelter": true,
     "shelterFade": 64
 }

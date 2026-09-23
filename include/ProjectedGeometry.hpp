@@ -32,11 +32,13 @@ namespace XPMF {
  * Three jobs, all done by swapping a shape's renderer data for a variant (see
  * ProjectedVertexData): keeping vertex colors from tinting the projected material (a profile's
  * neutralizeVertexColors), taking a vertex alpha the mesh's author painted against it out of
- * its way (its neutralizeVertexAlpha - except on the statics its neutralizeVertexAlphaSkip names by
- * EditorID, whose masks are wanted), and keeping it out from under roofs through that alpha
+ * its way (its neutralizeVertexAlpha), and keeping it out from under roofs through that alpha
  * (its roofShelter). Which of the three a shape gets, and how far in under a roof its
- * projection fades, are the settings of the profile its static's material object belongs to.
- * "Snow" below stands for any of them.
+ * projection fades, are the settings of the profile its static's material object belongs to -
+ * each setting less the statics its skip list names by EditorID (neutralizeVertexColorsSkip,
+ * neutralizeVertexAlphaSkip, roofShelterSkip: a mesh whose colors or mask are wanted as they
+ * are, a porch that is to stay snowed under its roof), see settingsOf. "Snow" below stands for
+ * any of them.
  *
  * The first pass happens inside TESBoundObject::Clone3D, hooked through TESObjectSTAT's vtable
  * (slot 0x40; statics are the only forms the engine applies a material object to). The engine
@@ -328,28 +330,44 @@ private:
     [[nodiscard]] static auto withGeometry(const Treatment& treatment) -> const Treatment*;
 
     /**
-     * @brief Whether the shapes of a static start from a vertex alpha of 1: the treatment's
-     * profile neutralizes it, and its neutralizeVertexAlphaSkip does not name the static
+     * @brief What a profile's geometry settings come to for one static
+     */
+    struct Settings {
+        bool neutralizeColors {}; /**< Its shapes get white vertex colors */
+        bool neutralizeAlpha {}; /**< Its shapes start from a vertex alpha of 1 */
+        bool shelter {}; /**< Its shapes lose the projection under cover */
+    };
+
+    /**
+     * @brief The base forms a profile's skip lists name
+     */
+    struct Kept {
+        std::unordered_set<const RE::TESForm*> colors; /**< neutralizeVertexColorsSkip */
+        std::unordered_set<const RE::TESForm*> alpha; /**< neutralizeVertexAlphaSkip */
+        std::unordered_set<const RE::TESForm*> shelter; /**< roofShelterSkip */
+    };
+
+    /**
+     * @brief The treatment's profile's geometry settings, each unless its skip list names the static
      *
      * @param base The static - or, under Seasons of Skyrim's winter snow, whatever base form the
-     *        snow went on; nullptr for one not known, which is neutralized like any other
+     *        snow went on; nullptr for one not known, which gets every setting
      */
-    [[nodiscard]] static auto neutralizesAlphaOf(const Treatment& treatment,
-                                                 const RE::TESForm* base) -> bool;
+    [[nodiscard]] static auto settingsOf(const Treatment& treatment,
+                                         const RE::TESForm* base) -> Settings;
 
     /**
-     * @brief Finds the base forms every profile's neutralizeVertexAlphaSkip names; once, before s_ready
+     * @brief Finds the base forms every profile's skip lists name; once, before s_ready
      */
-    static void findKeptAlpha();
+    static void findKept();
 
     /**
-     * @brief Gives the shapes of a fresh clone the shared variant of the profile's settings
+     * @brief Gives the shapes of a fresh clone the shared variant of its settings
      *
-     * @param neutralizeAlpha neutralizesAlphaOf the clone's base form
+     * @param settings settingsOf the clone's base form
      */
     static void dressClone(RE::NiAVObject& root,
-                           const Treatment& treatment,
-                           bool neutralizeAlpha);
+                           const Settings& settings);
 
     /**
      * @brief Whether any of this class's hooks are needed
@@ -360,7 +378,7 @@ private:
      * @brief Does for a clone Seasons of Skyrim has put its winter snow on what is done for one the
      * engine projected a profile's material onto
      *
-     * @param base The clone's base form, for neutralizesAlphaOf; nullptr when not known
+     * @param base The clone's base form, for settingsOf; nullptr when not known
      * @return bool Whether the clone carries that snow; false leaves it to its base form's material
      */
     static auto dressWinterSnow(RE::NiAVObject& root,
@@ -504,8 +522,7 @@ private:
     static inline Materials s_materials; /**< Written once, before s_ready */
     static inline const Materials::value_type* s_winterSnow
         = nullptr; /**< The entry of the record behind Seasons of Skyrim's single pass winter snow; ditto */
-    static inline std::unordered_map<const ConfigLoader::Profile*, std::unordered_set<const RE::TESForm*>>
-        s_keptAlpha; /**< Per profile, the base forms its neutralizeVertexAlphaSkip names; ditto */
+    static inline std::unordered_map<const ConfigLoader::Profile*, Kept> s_kept; /**< Per profile; ditto */
     static inline std::atomic<bool> s_ready {false}; /**< Gates the hook until s_materials is final */
     static inline std::atomic<bool> s_cellPass {false}; /**< Whether the cell pass runs at all */
     static inline CellSink s_cellSink;
