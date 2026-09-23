@@ -46,8 +46,8 @@ void MaterialMatcher::onDataLoaded()
 {
     if (!ConfigLoader::isAnyMaterialPatched() && !ConfigLoader::isAnyGeometryChanged()
         && !ConfigLoader::isAnySpecularChanged()) {
-        spdlog::info("No profile has patchMaterial, neutralizeVertexColors, neutralizeVertexAlpha, roofShelter or "
-                     "specularMult on: nothing to do");
+        spdlog::info("No profile names a texture or a material value, or has neutralizeVertexColors, "
+                     "neutralizeVertexAlpha, roofShelter or specularMult on: nothing to do");
         return;
     }
     if (!EditorIdLookup::isAvailable()) {
@@ -144,6 +144,9 @@ void MaterialMatcher::onDataLoaded()
         // and the projected textures like vanilla's does), as does every one of a profile that
         // patches nothing - but the shapes under either still carry a projection, which is what
         // the vertex color and roof shelter parts work on.
+        // Whether the profile has anything for the records at all: a texture, the Snow flag, a
+        // falloff value or a max angle
+        const bool patches = profile.patchesMaterial();
         std::vector<const Candidate*> ours;
         std::vector<const Candidate*> untouched;
         std::size_t leftMultipass = 0;
@@ -154,7 +157,7 @@ void MaterialMatcher::onDataLoaded()
                 continue;
             }
             const bool handsOff = candidate.pbr && !profile.pbr;
-            if (profile.patchMaterial && handsOff) {
+            if (patches && handsOff) {
                 ++leftPbr;
                 spdlog::info("{}: has a True PBR configuration and profile '{}' is not for PBR materials, so the "
                              "record is left untouched; its shapes still get the profile's vertex colors and roof "
@@ -162,7 +165,7 @@ void MaterialMatcher::onDataLoaded()
                              describeForm(*candidate.material, candidate.editorId),
                              profile.label());
             }
-            (profile.patchMaterial && !handsOff ? ours : untouched).push_back(&candidate);
+            (patches && !handsOff ? ours : untouched).push_back(&candidate);
         }
 
         // Without a material to patch there is no texture to load either

@@ -47,9 +47,10 @@ public:
     /**
      * @brief One profile: which material objects, and what is done for them
      *
-     * The settings fall into the plugin's three independent parts - patching the material
-     * (patchMaterial, the four textures, isSnow, the three falloff values and maxAngle), neutralizeVertexColors,
-     * and the vertex alpha (neutralizeVertexAlpha, roofShelter with shelterFade) - and any combination
+     * The settings fall into the plugin's three independent parts - patching the material (the
+     * four textures, isSnow, the three falloff values and maxAngle, each applied when given),
+     * neutralizeVertexColors, and the vertex alpha (neutralizeVertexAlpha, roofShelter with
+     * shelterFade) - and any combination
      * of them works. Each of the three geometry settings comes with a skip list: wildcard patterns
      * over the EditorIDs of the statics (base records) it is not applied to. A fourth, specularMult,
      * scales the specular strength of the shapes the projection is on.
@@ -64,7 +65,6 @@ public:
                         one kind of profile that patches such a material object's record: its textures are
                         taken to be made for PBR */
 
-        bool patchMaterial {}; /**< Whether the profile's material objects are changed at all */
         std::string diffuseTexture; /**< Data relative, lower case, backslashed path of the texture the projection
                                        shows; empty = not replaced, the game's ProjectedDiffuse stays */
         std::string normalTexture; /**< Same for its normal map; empty = the game's ProjectedNormal stays */
@@ -72,14 +72,12 @@ public:
         std::string detailNormalTexture; /**< Same for the detail normal; empty = the game's ProjectedNormalDetail
                                             stays */
         std::optional<bool> isSnow; /**< The material objects' Snow flag; std::nullopt (null in the file, or the
-                                       key left out) = as the record has it. Like the textures and the three
-                                       values below, nothing without patchMaterial: the loader clears it */
+                                       key left out) = as the record has it */
 
         // The three of a material object's values the engine's single pass path reads besides the
         // color and the Snow flag (see MaterialMatcher); the projection covers a pixel where
         // dot(normal, up) * vertex alpha > cos(max angle) + (1 - cos) * (bias + scale * noise).
-        // std::nullopt (null in the file, or the key left out) = as each record has it, which is
-        // also all they can be without patchMaterial: the loader clears them
+        // std::nullopt (null in the file, or the key left out) = as each record has it
         std::optional<float> falloffScale; /**< How far the coverage noise raises what a surface has to face up by:
                                               the patches the projection is missing from. 0.25 to 0.5 on the vanilla
                                               snow materials */
@@ -134,6 +132,16 @@ public:
         [[nodiscard]] auto overridesFalloff() const -> bool
         {
             return falloffScale.has_value() || falloffBias.has_value() || noiseUVScale.has_value();
+        }
+
+        /**
+         * @brief Whether the profile has anything for its material objects (or their statics) at
+         * all: a texture named, or any of the material values given
+         */
+        [[nodiscard]] auto patchesMaterial() const -> bool
+        {
+            return !diffuseTexture.empty() || !normalTexture.empty() || !noiseTexture.empty()
+                || !detailNormalTexture.empty() || isSnow.has_value() || overridesFalloff() || maxAngle.has_value();
         }
     };
 
@@ -211,7 +219,6 @@ private:
 
     // What a profile that leaves a setting out gets: the shipped snow profile's values
     constexpr static bool DEFAULT_PBR = false;
-    constexpr static bool DEFAULT_PATCH_MATERIAL = true;
     constexpr static bool DEFAULT_NEUTRALIZE_VERTEX_COLORS = true;
     constexpr static bool DEFAULT_NEUTRALIZE_VERTEX_ALPHA = true; /**< The roof shelter decides what lies under
                                                                      cover; a mask painted for the game's own

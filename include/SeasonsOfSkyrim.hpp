@@ -38,7 +38,7 @@ namespace XPMF {
  * treated as standing under SOS_WIN_SnowMaterialObjectSP, whatever its base form says: it gets
  * that material's profile's vertex colors and roof shelter. And its projection color - and its
  * falloff values, where the profile overrides them - are brought in line with what the record
- * says now (unless the record was left untouched - a True PBR configuration, patchMaterial off),
+ * says now (unless the record was left untouched - a True PBR configuration, nothing to patch),
  * which is what makes its draws the profile's.
  * ProjectedGeometry puts its Clone3D hooks in at kPostPostLoad for this, one message after
  * Seasons of Skyrim's, so that they wrap its hooks and see the snow it just put on; the cell pass

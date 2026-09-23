@@ -292,26 +292,9 @@ public:
     }
 
     /**
-     * @brief A key that was a setting once and is none any more: no problem - a file written for
-     * an older version has it - but worth a word on what became of it
-     */
-    void retired(const char* key,
-                 std::string_view note)
-    {
-        if (find(key, false) != nullptr) {
-            m_notes.push_back(std::format("\"{}\" is no longer a setting and was ignored: {}", key, note));
-        }
-    }
-
-    /**
      * @brief Everything wrong with the fields asked for so far; empty when the object is fine
      */
     [[nodiscard]] auto problems() const -> const std::vector<std::string>& { return m_problems; }
-
-    /**
-     * @brief What there is to say about keys that were settings once
-     */
-    [[nodiscard]] auto notes() const -> const std::vector<std::string>& { return m_notes; }
 
     /**
      * @brief Keys nothing asked for. Not a reason to reject a file - a "comment" key is the only
@@ -358,7 +341,6 @@ private:
     const Json& m_object;
     std::vector<std::string> m_asked;
     std::vector<std::string> m_problems;
-    std::vector<std::string> m_notes;
 };
 
 /**
@@ -374,11 +356,8 @@ auto accept(const Fields& fields,
         spdlog::error("{} was rejected: {}", fileName, joinList(fields.problems(), "; "));
         return false;
     }
-    for (const auto& note : fields.notes()) {
-        spdlog::warn("{}: {}", fileName, note);
-    }
-    if (const auto unknown = fields.unknownKeys(); !unknown.empty()) {
-        spdlog::warn("{}: not settings, and ignored: {}", fileName, joinList(unknown));
+    for (const auto& key : fields.unknownKeys()) {
+        spdlog::warn("{}: \"{}\" is not a setting and was ignored", fileName, key);
     }
     return true;
 }
@@ -428,7 +407,6 @@ void ConfigLoader::loadConfig()
                 profile.excludeEditorIds.push_back(Text::toLower(toGameCodePage(pattern)));
             }
             profile.pbr = fields.boolean("pbr", DEFAULT_PBR);
-            profile.patchMaterial = fields.boolean("patchMaterial", DEFAULT_PATCH_MATERIAL);
             profile.diffuseTexture = normalizeTexturePath(fields.optionalString("diffuseTexture"));
             profile.normalTexture = normalizeTexturePath(fields.optionalString("normalTexture"));
             profile.noiseTexture = normalizeTexturePath(fields.optionalString("noiseTexture"));
@@ -459,12 +437,6 @@ void ConfigLoader::loadConfig()
             profile.shelterFade = fields.number("shelterFade", 0.0F, MAX_SHELTER_FADE, DEFAULT_SHELTER_FADE);
             // The mesh's specular on the shapes the projection is on (ProjectedGeometry)
             profile.specularMult = fields.optionalNumberBetween("specularMult", 0.0, MAX_SPECULAR_MULT);
-            // The shelter used to be able to replace the mesh's alpha instead of multiplying it;
-            // starting from 1 is neutralizeVertexAlpha's job now, shelter or no shelter
-            fields.retired(
-                "shelterVertMult",
-                "the roof shelter always multiplies the vertex alpha, and neutralizeVertexAlpha says whether "
-                "that is the mesh's own or 1");
 
             if (!accept(fields, path.filename().string())) {
                 continue;
@@ -492,37 +464,6 @@ void ConfigLoader::loadConfig()
                  profile.neutralizeVertexAlphaSkip);
             idle("roofShelterSkip", "roofShelter", profile.roofShelter, profile.roofShelterSkip);
 
-            // The material settings only mean anything to a profile that patches its materials:
-            // without patchMaterial they are cleared, so that nothing downstream can read them
-            if (!profile.patchMaterial) {
-                std::vector<std::string> given;
-                if (profile.isSnow.has_value()) {
-                    given.emplace_back("\"isSnow\"");
-                }
-                if (profile.falloffScale.has_value()) {
-                    given.emplace_back("\"falloffScale\"");
-                }
-                if (profile.falloffBias.has_value()) {
-                    given.emplace_back("\"falloffBias\"");
-                }
-                if (profile.noiseUVScale.has_value()) {
-                    given.emplace_back("\"noiseUVScale\"");
-                }
-                if (profile.maxAngle.has_value()) {
-                    given.emplace_back("\"maxAngle\"");
-                }
-                if (!given.empty()) {
-                    spdlog::warn("{}: \"patchMaterial\" is off, so {} {} nothing",
-                                 path.filename().string(),
-                                 joinList(given),
-                                 given.size() == 1 ? "does" : "do");
-                }
-                profile.isSnow.reset();
-                profile.falloffScale.reset();
-                profile.falloffBias.reset();
-                profile.noiseUVScale.reset();
-                profile.maxAngle.reset();
-            }
             s_profiles.push_back(std::move(profile));
         }
         if (s_profiles.empty()) {
@@ -559,7 +500,6 @@ void ConfigLoader::loadConfig()
         spdlog::info("Config Loaded: [{}] EditorIDs: {}", profile.name, joinList(profile.editorIds));
         spdlog::info("Config Loaded: [{}] Exclude EditorIDs: {}", profile.name, joinList(profile.excludeEditorIds));
         spdlog::info("Config Loaded: [{}] PBR: {}", profile.name, profile.pbr);
-        spdlog::info("Config Loaded: [{}] Patch Material: {}", profile.name, profile.patchMaterial);
         spdlog::info("Config Loaded: [{}] Diffuse Texture: {}", profile.name, orGame(profile.diffuseTexture));
         spdlog::info("Config Loaded: [{}] Normal Texture: {}", profile.name, orGame(profile.normalTexture));
         spdlog::info("Config Loaded: [{}] Noise Texture: {}", profile.name, orGame(profile.noiseTexture));
@@ -594,7 +534,10 @@ void ConfigLoader::loadConfig()
 
 auto ConfigLoader::getProfiles() -> const std::vector<Profile>& { return s_profiles; }
 
-auto ConfigLoader::isAnyMaterialPatched() -> bool { return std::ranges::any_of(s_profiles, &Profile::patchMaterial); }
+auto ConfigLoader::isAnyMaterialPatched() -> bool
+{
+    return std::ranges::any_of(s_profiles, [](const Profile& profile) -> bool { return profile.patchesMaterial(); });
+}
 
 auto ConfigLoader::isAnyGeometryChanged() -> bool
 {
@@ -619,7 +562,6 @@ auto ConfigLoader::builtInProfiles() -> std::vector<Profile>
     snow.name = "snow";
     snow.editorIds = {DEFAULT_SNOW_PATTERN};
     snow.pbr = DEFAULT_PBR;
-    snow.patchMaterial = DEFAULT_PATCH_MATERIAL;
     snow.diffuseTexture = DEFAULT_SNOW_DIFFUSE;
     snow.normalTexture = DEFAULT_SNOW_NORMAL;
     snow.isSnow = true;

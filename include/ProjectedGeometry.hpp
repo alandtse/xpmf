@@ -100,9 +100,9 @@ public:
     struct Treatment {
         const ConfigLoader::Profile* profile {}; /**< Never nullptr; points into ConfigLoader's list */
         float meanNoise {}; /**< Average of the coverage noise the material's draws sample */
-        bool untouched {}; /**< Record left as it was (a True PBR configuration, patchMaterial off, textures
-                              missing): its shapes get the vertex colors and shelter like any other, but
-                              Seasons of Skyrim's winter snow is not re-colored to it (adoptWinterSnow) */
+        bool untouched {}; /**< Record left as it was (a True PBR configuration, no material setting given,
+                              textures missing): its shapes get the vertex colors and shelter like any other,
+                              but Seasons of Skyrim's winter snow is not re-colored to it (adoptWinterSnow) */
     };
 
     /**
