@@ -289,20 +289,31 @@ void ProjectedGeometry::adoptWinterSnow(RE::NiAVObject& root)
         return; // the record says what it always said, and Seasons of Skyrim's copy says the same
     }
 
-    // Seasons of Skyrim projects a copy of the record's color that it took before MaterialMatcher
-    // gave the record the profile's (see SeasonsOfSkyrim). The color is read from the shader
-    // property at every draw, so writing it is all it takes - to every shape the snow was ever
-    // projected onto (alpha 1, see collectReference), one this plugin switched off included.
-    const RE::NiColor& color = material->directionalData.singlePassColor;
+    // Seasons of Skyrim projects a copy of the record's color and falloff values that it took
+    // before MaterialMatcher gave the record the profile's (see SeasonsOfSkyrim). Both are read
+    // from the shader property at every draw, so writing them is all it takes - to every shape the
+    // snow was ever projected onto (alpha 1, see collectReference), one this plugin switched off
+    // included. The falloff values only where the profile overrides one: the property holds
+    // (scale, bias, 1 / noise UV scale, cos(max angle)) the way Clone3D and Seasons of Skyrim
+    // write it, and the angle is the static's own
+    const auto& data = material->directionalData;
+    const RE::NiColor& color = data.singlePassColor;
+    const bool falloff = treatment.profile->overridesFalloff();
     forEachLeaf(root, K_MAX_NODES_PER_REF, false, [&](RE::NiAVObject& object) -> void {
         auto* const geometry = object.AsGeometry();
         auto* const shader = geometry != nullptr
             ? netimmerse_cast<RE::BSLightingShaderProperty*>(geometry->GetGeometryRuntimeData().shaderProperty.get())
             : nullptr;
-        if (shader != nullptr && wasProjectedOnto(*shader)) {
-            shader->projectedUVColor.red = color.red;
-            shader->projectedUVColor.green = color.green;
-            shader->projectedUVColor.blue = color.blue;
+        if (shader == nullptr || !wasProjectedOnto(*shader)) {
+            return;
+        }
+        shader->projectedUVColor.red = color.red;
+        shader->projectedUVColor.green = color.green;
+        shader->projectedUVColor.blue = color.blue;
+        if (falloff) {
+            shader->projectedUVParams.red = data.falloffScale;
+            shader->projectedUVParams.green = data.falloffBias;
+            shader->projectedUVParams.blue = 1.0F / data.noiseUVScale;
         }
     });
 }

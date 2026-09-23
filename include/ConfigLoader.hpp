@@ -32,12 +32,13 @@ namespace XPMF {
  * Everything is read once at plugin load (loadConfig) into statics; the getters are plain
  * accessors and never touch the disk. Only "name" and "editorIds" have to be there; every other
  * setting has a default - the shipped snow profile's, except that a texture not named is not
- * replaced and a Snow flag not given is the record's - so a profile can be three lines long. What is there is validated
- * strictly: a field has to have its type (and its range), and a file with any problem at all is rejected as a whole,
- * with every reason in one error in the log - half a profile is not something anyone asked for. Keys that are not
- * settings only earn a warning, a "comment" key being the one way to leave a note in JSON. Without the folder the
- * built-in profiles (ash, snow) apply; with it, exactly the valid files in it do - deleting ash.json is how ash is left
- * alone.
+ * replaced and a Snow flag or a falloff value not given is the record's - so a profile can be
+ * three lines long. What is there is validated strictly: a field has to have its type (and its
+ * range), and a file with any problem at all is rejected as a whole, with every reason in one
+ * error in the log - half a profile is not something anyone asked for. Keys that are not settings
+ * only earn a warning, a "comment" key being the one way to leave a note in JSON. Without the
+ * folder the built-in profiles (ash, snow) apply; with it, exactly the valid files in it do -
+ * deleting ash.json is how ash is left alone.
  */
 class ConfigLoader {
 public:
@@ -47,8 +48,8 @@ public:
      * @brief One profile: which material objects, and what is done for them
      *
      * The settings fall into the plugin's three independent parts - patching the material
-     * (patchMaterial, the four textures, isSnow), neutralizeVertexColors, and roofShelter with
-     * shelterFade - and any combination of them works.
+     * (patchMaterial, the four textures, isSnow and the three falloff values), neutralizeVertexColors,
+     * and roofShelter with shelterFade - and any combination of them works.
      */
     struct Profile {
         std::string name; /**< For the log */
@@ -70,6 +71,21 @@ public:
         std::optional<bool> isSnow; /**< The material objects' Snow flag; std::nullopt (null in the file, or the
                                        key left out) = as the record has it */
 
+        // The three of a material object's values the engine's single pass path reads besides the
+        // color and the Snow flag (see MaterialMatcher); the projection covers a pixel where
+        // dot(normal, up) * vertex alpha > cos(max angle) + (1 - cos) * (bias + scale * noise).
+        // std::nullopt (null in the file, or the key left out) = as each record has it
+        std::optional<float> falloffScale; /**< How far the coverage noise raises what a surface has to face up by:
+                                              the patches the projection is missing from. 0.25 to 0.5 on the vanilla
+                                              snow materials */
+        std::optional<float> falloffBias; /**< What a surface has to face up by before the noise: how much of it is
+                                             covered at all. 0.4 on the vanilla snow materials, up to 0.82 on the
+                                             "Light" ones that are a dusting */
+        std::optional<float> noiseUVScale; /**< World units per tile of the coverage noise - and, the shader tiling
+                                              the projected textures at a fixed ratio to it, of the profile's
+                                              textures. 20 to 1500 on the vanilla materials; above 0, the engine
+                                              divides by it */
+
         bool neutralizeVertexColors {}; /**< Whether shapes that carry the projection get white vertex colors */
 
         bool roofShelter {}; /**< Whether vertex alpha is rewritten to keep the projection out from under cover */
@@ -82,6 +98,14 @@ public:
          * @brief The name with the file it came from: two files may well share a name
          */
         [[nodiscard]] auto label() const -> std::string { return file.empty() ? name : name + " (" + file + ")"; }
+
+        /**
+         * @brief Whether the profile gives its material objects any falloff value of its own
+         */
+        [[nodiscard]] auto overridesFalloff() const -> bool
+        {
+            return falloffScale.has_value() || falloffBias.has_value() || noiseUVScale.has_value();
+        }
     };
 
     /**

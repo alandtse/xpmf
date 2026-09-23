@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -181,6 +182,32 @@ public:
         const double parsed = value->is_number() ? value->get<double>() : std::nan("");
         if (!(parsed >= lowest && parsed <= highest)) {
             return wrong<float>(key, std::format("a number from {} to {}, or left out", lowest, highest));
+        }
+        return static_cast<float>(parsed);
+    }
+
+    /**
+     * @brief A number, or "no opinion" for null or a key left out
+     *
+     * @param above What the number has to lie above, if anything
+     * @return std::optional<float> Finite, and one a float can hold
+     */
+    [[nodiscard]] auto optionalNumber(const char* key,
+                                      std::optional<double> above = std::nullopt) -> std::optional<float>
+    {
+        const auto* const value = find(key, false);
+        if (value == nullptr || value->is_null()) {
+            return std::nullopt;
+        }
+        // Anything that is not a plain number a float can hold, NaN and infinities included, fails
+        // the comparisons
+        constexpr double LARGEST = std::numeric_limits<float>::max();
+        const double parsed = value->is_number() ? value->get<double>() : std::nan("");
+        if (!(parsed >= -LARGEST && parsed <= LARGEST) || (above.has_value() && !(parsed > *above))) {
+            return wrong<std::optional<float>>(key,
+                                               above.has_value()
+                                                   ? std::format("a number above {}, null, or left out", *above)
+                                                   : "a number, null, or left out");
         }
         return static_cast<float>(parsed);
     }
@@ -367,6 +394,11 @@ void ConfigLoader::loadConfig()
             profile.noiseTexture = normalizeTexturePath(fields.optionalString("noiseTexture"));
             profile.detailNormalTexture = normalizeTexturePath(fields.optionalString("detailNormalTexture"));
             profile.isSnow = fields.optionalBoolean("isSnow");
+            // The record's own falloff values unless the profile gives one; the engine divides by
+            // the noise UV scale
+            profile.falloffScale = fields.optionalNumber("falloffScale");
+            profile.falloffBias = fields.optionalNumber("falloffBias");
+            profile.noiseUVScale = fields.optionalNumber("noiseUVScale", 0.0);
             profile.neutralizeVertexColors = fields.boolean("neutralizeVertexColors", DEFAULT_NEUTRALIZE_VERTEX_COLORS);
             profile.roofShelter = fields.boolean("roofShelter", DEFAULT_ROOF_SHELTER);
             profile.shelterFade = fields.number("shelterFade", 0.0F, MAX_SHELTER_FADE, DEFAULT_SHELTER_FADE);
@@ -406,6 +438,9 @@ void ConfigLoader::loadConfig()
     const auto orGame = [](const std::string& path) -> std::string_view {
         return path.empty() ? std::string_view {"(not replaced)"} : std::string_view {path};
     };
+    const auto orRecord = [](const std::optional<float>& value) -> std::string {
+        return value.has_value() ? std::format("{}", *value) : "(as the record has it)";
+    };
     spdlog::info("Config Loaded: {} profiles", s_profiles.size());
     for (const auto& profile : s_profiles) {
         spdlog::info("Config Loaded: [{}] File: {}", profile.name, profile.file.empty() ? "(built in)" : profile.file);
@@ -423,6 +458,9 @@ void ConfigLoader::loadConfig()
                      !profile.isSnow.has_value() ? "(as the record has it)"
                          : *profile.isSnow       ? "true"
                                                  : "false");
+        spdlog::info("Config Loaded: [{}] Falloff Scale: {}", profile.name, orRecord(profile.falloffScale));
+        spdlog::info("Config Loaded: [{}] Falloff Bias: {}", profile.name, orRecord(profile.falloffBias));
+        spdlog::info("Config Loaded: [{}] Noise UV Scale: {}", profile.name, orRecord(profile.noiseUVScale));
         spdlog::info("Config Loaded: [{}] Neutralize Vertex Colors: {}", profile.name, profile.neutralizeVertexColors);
         spdlog::info("Config Loaded: [{}] Roof Shelter: {}", profile.name, profile.roofShelter);
         spdlog::info("Config Loaded: [{}] Shelter Fade: {}", profile.name, profile.shelterFade);

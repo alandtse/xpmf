@@ -67,10 +67,10 @@ namespace XPMF {
  * as a renderer texture, there is nothing to tag: the game's average is divided out of the color
  * instead, color = mean(texture) / mean(ProjectedDiffuse), and the game's textures stay.
  *
- * What stays out of reach is tiling: the shader derives the projected diffuse's coordinates from
- * the coverage noise's, scaled by fProjectedUVDiffuseNormalTilingScale, and the noise's scale is
- * the material's own noiseUVScale - so the texture cannot be at landscape scale on every material
- * (vanilla noise scales run from 20 to 1500).
+ * Tiling goes with the coverage: the shader derives the projected diffuse's coordinates from the
+ * coverage noise's, scaled by fProjectedUVDiffuseNormalTilingScale, and the noise's scale is the
+ * material's own noiseUVScale (vanilla ones run from 20 to 1500) - so a texture at another scale
+ * takes another noise scale, which a profile can give its materials (noiseUVScale, below).
  *
  * The values are written into the existing materials rather than into new forms that statics get
  * pointed at. Rendering cannot tell the difference - Clone3D reads the same values off whichever
@@ -78,8 +78,10 @@ namespace XPMF {
  * Tweaks still recognizes a snowy static for its Dynamic Snow Material tweak (it tests the
  * EditorID of the static's MATO), a material that another plugin assigns to a static after this
  * one ran still matches, and the LOD materials above are covered by the same loop. Each material
- * also keeps its own scale, bias and noise scale, so nothing gains or loses cover; only the color
- * (and the snow flag, where the profile says so) changes.
+ * also keeps its own scale, bias and noise scale unless the profile gives one (falloffScale,
+ * falloffBias, noiseUVScale: the three of the record's values the single pass path reads, so the
+ * only three there is anything to override), so nothing gains or loses cover that the profile did
+ * not ask for; only the color (and the snow flag, where the profile says so) changes.
  *
  * Multipass materials are left alone altogether. They render a second piece of geometry with a
  * texture set of their own, nothing about them is projected, and none of the plugin's three parts

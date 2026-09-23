@@ -185,8 +185,7 @@ void MaterialMatcher::onDataLoaded()
 
             // The color: the profile's where its diffuse supplies the look, the record's own
             // where the game's diffuse stays - tagged either way when there is a set of textures
-            // to name (see ProjectedTextures). Scale, bias and noise scale stay the material's
-            // own, which keeps its coverage what it was.
+            // to name (see ProjectedTextures)
             const RE::NiColor before = data.singlePassColor;
             RE::NiColor color = match->color.value_or(before);
             if (match->set.has_value()) {
@@ -201,6 +200,26 @@ void MaterialMatcher::onDataLoaded()
                          isSnow ? "on" : "off");
             data.singlePassColor = color;
             data.flags = isSnow ? Flag::kSnow : Flag::kNone;
+
+            // Scale, bias and noise scale: the profile's where it gives one, the material's own
+            // where not - which keeps its coverage what it was. The noise scale takes the
+            // projected textures' tiling with it (see the class)
+            if (profile.overridesFalloff()) {
+                const auto take = [](float& field, const std::optional<float>& given) -> std::string {
+                    const float before = field;
+                    field = given.value_or(before);
+                    return given.has_value() ? std::format("{:g} -> {:g}", before, field)
+                                             : std::format("{:g} (its own)", before);
+                };
+                const std::string scale = take(data.falloffScale, profile.falloffScale);
+                const std::string bias = take(data.falloffBias, profile.falloffBias);
+                const std::string noiseScale = take(data.noiseUVScale, profile.noiseUVScale);
+                spdlog::info("{}: falloff scale {}, falloff bias {}, noise UV scale {}",
+                             describeForm(*material, candidate->editorId),
+                             scale,
+                             bias,
+                             noiseScale);
+            }
 
             materials.emplace(material, ProjectedGeometry::Treatment {.profile = &profile, .meanNoise = noiseAverage});
             statics += usage[material];

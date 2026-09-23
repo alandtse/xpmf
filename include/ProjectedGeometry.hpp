@@ -340,7 +340,8 @@ private:
 
     /**
      * @brief Gives the shapes under a root Seasons of Skyrim snowed on the projection color its
-     * record has now, which makes their draws the profile's (see SeasonsOfSkyrim)
+     * record has now, which makes their draws the profile's, and the falloff values the profile
+     * overrides (see SeasonsOfSkyrim)
      */
     static void adoptWinterSnow(RE::NiAVObject& root);
 
