@@ -44,7 +44,8 @@ auto describeForm(const RE::TESForm& form,
 void MaterialMatcher::onDataLoaded()
 {
     if (!ConfigLoader::isAnyMaterialPatched() && !ConfigLoader::isAnyGeometryChanged()) {
-        spdlog::info("No profile has patchMaterial, neutralizeVertexColors or roofShelter on: nothing to do");
+        spdlog::info("No profile has patchMaterial, neutralizeVertexColors, neutralizeVertexAlpha or roofShelter on: "
+                     "nothing to do");
         return;
     }
     if (!EditorIdLookup::isAvailable()) {

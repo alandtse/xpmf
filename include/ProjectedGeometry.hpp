@@ -19,6 +19,7 @@
 #include <optional>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -28,11 +29,14 @@ namespace XPMF {
  * @brief Gives shapes with a projected material on them - snow, ash, whatever the profiles name -
  * the vertex colors this plugin wants them to have
  *
- * Two jobs, both done by swapping a shape's renderer data for a variant (see ProjectedVertexData):
- * keeping vertex colors from tinting the projected material (a profile's neutralizeVertexColors)
- * and keeping it out from under roofs through vertex alpha (its roofShelter). Which of the two a
- * shape gets, and how far in under a roof its projection fades, are the settings of the profile
- * its static's material object belongs to. "Snow" below stands for any of them.
+ * Three jobs, all done by swapping a shape's renderer data for a variant (see
+ * ProjectedVertexData): keeping vertex colors from tinting the projected material (a profile's
+ * neutralizeVertexColors), taking a vertex alpha the mesh's author painted against it out of
+ * its way (its neutralizeVertexAlpha - except on the statics its neutralizeVertexAlphaSkip names by
+ * EditorID, whose masks are wanted), and keeping it out from under roofs through that alpha
+ * (its roofShelter). Which of the three a shape gets, and how far in under a roof its
+ * projection fades, are the settings of the profile its static's material object belongs to.
+ * "Snow" below stands for any of them.
  *
  * The first pass happens inside TESBoundObject::Clone3D, hooked through TESObjectSTAT's vtable
  * (slot 0x40; statics are the only forms the engine applies a material object to). The engine
@@ -322,8 +326,30 @@ private:
      * @brief A treatment, if its profile changes vertex colors or alpha at all; nullptr otherwise
      */
     [[nodiscard]] static auto withGeometry(const Treatment& treatment) -> const Treatment*;
+
+    /**
+     * @brief Whether the shapes of a static start from a vertex alpha of 1: the treatment's
+     * profile neutralizes it, and its neutralizeVertexAlphaSkip does not name the static
+     *
+     * @param base The static - or, under Seasons of Skyrim's winter snow, whatever base form the
+     *        snow went on; nullptr for one not known, which is neutralized like any other
+     */
+    [[nodiscard]] static auto neutralizesAlphaOf(const Treatment& treatment,
+                                                 const RE::TESForm* base) -> bool;
+
+    /**
+     * @brief Finds the base forms every profile's neutralizeVertexAlphaSkip names; once, before s_ready
+     */
+    static void findKeptAlpha();
+
+    /**
+     * @brief Gives the shapes of a fresh clone the shared variant of the profile's settings
+     *
+     * @param neutralizeAlpha neutralizesAlphaOf the clone's base form
+     */
     static void dressClone(RE::NiAVObject& root,
-                           const Treatment& treatment);
+                           const Treatment& treatment,
+                           bool neutralizeAlpha);
 
     /**
      * @brief Whether any of this class's hooks are needed
@@ -334,9 +360,11 @@ private:
      * @brief Does for a clone Seasons of Skyrim has put its winter snow on what is done for one the
      * engine projected a profile's material onto
      *
+     * @param base The clone's base form, for neutralizesAlphaOf; nullptr when not known
      * @return bool Whether the clone carries that snow; false leaves it to its base form's material
      */
-    static auto dressWinterSnow(RE::NiAVObject& root) -> bool;
+    static auto dressWinterSnow(RE::NiAVObject& root,
+                                const RE::TESForm* base) -> bool;
 
     /**
      * @brief Gives the shapes under a root Seasons of Skyrim snowed on the projection color its
@@ -476,6 +504,8 @@ private:
     static inline Materials s_materials; /**< Written once, before s_ready */
     static inline const Materials::value_type* s_winterSnow
         = nullptr; /**< The entry of the record behind Seasons of Skyrim's single pass winter snow; ditto */
+    static inline std::unordered_map<const ConfigLoader::Profile*, std::unordered_set<const RE::TESForm*>>
+        s_keptAlpha; /**< Per profile, the base forms its neutralizeVertexAlphaSkip names; ditto */
     static inline std::atomic<bool> s_ready {false}; /**< Gates the hook until s_materials is final */
     static inline std::atomic<bool> s_cellPass {false}; /**< Whether the cell pass runs at all */
     static inline CellSink s_cellSink;

@@ -10,7 +10,15 @@
     "normalTexture": "textures/landscape/snow01_n.dds",
     "isSnow": true,
     "neutralizeVertexColors": true,
+    "neutralizeVertexAlpha": true,
+    "neutralizeVertexAlphaSkip": [
+        "*Walkway*Snow",
+        "Farmhouse0?Snow",
+        "FarmhouseSmith01Snow",
+        "FarmInn01Snow",
+        "BDS_FarmInnDestroyed01Snow",
+        "BDS_FarmLumbermill01Snow"
+    ],
     "roofShelter": true,
-    "shelterFade": 64,
-    "shelterVertMult": true
+    "shelterFade": 64
 }

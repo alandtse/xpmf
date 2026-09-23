@@ -273,9 +273,26 @@ public:
     }
 
     /**
+     * @brief A key that was a setting once and is none any more: no problem - a file written for
+     * an older version has it - but worth a word on what became of it
+     */
+    void retired(const char* key,
+                 std::string_view note)
+    {
+        if (find(key, false) != nullptr) {
+            m_notes.push_back(std::format("\"{}\" is no longer a setting and was ignored: {}", key, note));
+        }
+    }
+
+    /**
      * @brief Everything wrong with the fields asked for so far; empty when the object is fine
      */
     [[nodiscard]] auto problems() const -> const std::vector<std::string>& { return m_problems; }
+
+    /**
+     * @brief What there is to say about keys that were settings once
+     */
+    [[nodiscard]] auto notes() const -> const std::vector<std::string>& { return m_notes; }
 
     /**
      * @brief Keys nothing asked for. Not a reason to reject a file - a "comment" key is the only
@@ -322,6 +339,7 @@ private:
     const Json& m_object;
     std::vector<std::string> m_asked;
     std::vector<std::string> m_problems;
+    std::vector<std::string> m_notes;
 };
 
 /**
@@ -336,6 +354,9 @@ auto accept(const Fields& fields,
     if (!fields.problems().empty()) {
         spdlog::error("{} was rejected: {}", fileName, joinList(fields.problems(), "; "));
         return false;
+    }
+    for (const auto& note : fields.notes()) {
+        spdlog::warn("{}: {}", fileName, note);
     }
     if (const auto unknown = fields.unknownKeys(); !unknown.empty()) {
         spdlog::warn("{}: not settings, and ignored: {}", fileName, joinList(unknown));
@@ -400,9 +421,18 @@ void ConfigLoader::loadConfig()
             profile.falloffBias = fields.optionalNumber("falloffBias");
             profile.noiseUVScale = fields.optionalNumber("noiseUVScale", 0.0);
             profile.neutralizeVertexColors = fields.boolean("neutralizeVertexColors", DEFAULT_NEUTRALIZE_VERTEX_COLORS);
+            profile.neutralizeVertexAlpha = fields.boolean("neutralizeVertexAlpha", DEFAULT_NEUTRALIZE_VERTEX_ALPHA);
+            for (const auto& pattern : fields.strings("neutralizeVertexAlphaSkip", false)) {
+                profile.neutralizeVertexAlphaSkip.push_back(Text::toLower(toGameCodePage(pattern)));
+            }
             profile.roofShelter = fields.boolean("roofShelter", DEFAULT_ROOF_SHELTER);
             profile.shelterFade = fields.number("shelterFade", 0.0F, MAX_SHELTER_FADE, DEFAULT_SHELTER_FADE);
-            profile.shelterVertMult = fields.boolean("shelterVertMult", DEFAULT_SHELTER_VERT_MULT);
+            // The shelter used to be able to replace the mesh's alpha instead of multiplying it;
+            // starting from 1 is neutralizeVertexAlpha's job now, shelter or no shelter
+            fields.retired(
+                "shelterVertMult",
+                "the roof shelter always multiplies the vertex alpha, and neutralizeVertexAlpha says whether "
+                "that is the mesh's own or 1");
 
             if (!accept(fields, path.filename().string())) {
                 continue;
@@ -410,6 +440,12 @@ void ConfigLoader::loadConfig()
             if (profile.editorIds.empty()) {
                 spdlog::warn("{}: \"editorIds\" is empty, so the profile matches no material object",
                              path.filename().string());
+            }
+            if (!profile.neutralizeVertexAlpha && !profile.neutralizeVertexAlphaSkip.empty()) {
+                spdlog::warn(
+                    "{}: \"neutralizeVertexAlphaSkip\" names statics, but \"neutralizeVertexAlpha\" is off, so it "
+                    "does nothing",
+                    path.filename().string());
             }
             s_profiles.push_back(std::move(profile));
         }
@@ -462,9 +498,12 @@ void ConfigLoader::loadConfig()
         spdlog::info("Config Loaded: [{}] Falloff Bias: {}", profile.name, orRecord(profile.falloffBias));
         spdlog::info("Config Loaded: [{}] Noise UV Scale: {}", profile.name, orRecord(profile.noiseUVScale));
         spdlog::info("Config Loaded: [{}] Neutralize Vertex Colors: {}", profile.name, profile.neutralizeVertexColors);
+        spdlog::info("Config Loaded: [{}] Neutralize Vertex Alpha: {}", profile.name, profile.neutralizeVertexAlpha);
+        spdlog::info("Config Loaded: [{}] Neutralize Vertex Alpha Skip: {}",
+                     profile.name,
+                     joinList(profile.neutralizeVertexAlphaSkip));
         spdlog::info("Config Loaded: [{}] Roof Shelter: {}", profile.name, profile.roofShelter);
         spdlog::info("Config Loaded: [{}] Shelter Fade: {}", profile.name, profile.shelterFade);
-        spdlog::info("Config Loaded: [{}] Shelter Vert Mult: {}", profile.name, profile.shelterVertMult);
     }
 }
 
@@ -475,7 +514,7 @@ auto ConfigLoader::isAnyMaterialPatched() -> bool { return std::ranges::any_of(s
 auto ConfigLoader::isAnyGeometryChanged() -> bool
 {
     return std::ranges::any_of(s_profiles, [](const Profile& profile) -> bool {
-        return profile.neutralizeVertexColors || profile.roofShelter;
+        return profile.neutralizeVertexColors || profile.neutralizeVertexAlpha || profile.roofShelter;
     });
 }
 
@@ -494,9 +533,9 @@ auto ConfigLoader::builtInProfiles() -> std::vector<Profile>
     snow.normalTexture = DEFAULT_SNOW_NORMAL;
     snow.isSnow = true;
     snow.neutralizeVertexColors = DEFAULT_NEUTRALIZE_VERTEX_COLORS;
+    snow.neutralizeVertexAlpha = DEFAULT_NEUTRALIZE_VERTEX_ALPHA;
     snow.roofShelter = DEFAULT_ROOF_SHELTER;
     snow.shelterFade = DEFAULT_SHELTER_FADE;
-    snow.shelterVertMult = DEFAULT_SHELTER_VERT_MULT;
 
     // Ash falls like snow and lies like snow, so it gets everything snow gets - except the snow
     // shading, which is sparkle and rim light

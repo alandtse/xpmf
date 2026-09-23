@@ -49,7 +49,8 @@ public:
      *
      * The settings fall into the plugin's three independent parts - patching the material
      * (patchMaterial, the four textures, isSnow and the three falloff values), neutralizeVertexColors,
-     * and roofShelter with shelterFade - and any combination of them works.
+     * and the vertex alpha (neutralizeVertexAlpha with neutralizeVertexAlphaSkip, roofShelter with shelterFade)
+     * - and any combination of them works.
      */
     struct Profile {
         std::string name; /**< For the log */
@@ -88,11 +89,19 @@ public:
 
         bool neutralizeVertexColors {}; /**< Whether shapes that carry the projection get white vertex colors */
 
-        bool roofShelter {}; /**< Whether vertex alpha is rewritten to keep the projection out from under cover */
+        // Vertex alpha scales the projection (see ProjectedVertexData): what the shapes start from,
+        // and whether the roof shelter then multiplies it down
+        bool neutralizeVertexAlpha {}; /**< Whether shapes that carry the projection start from a vertex alpha of 1
+                                          - a mask the mesh's author painted against the game's own projection is
+                                          discarded - rather than from the mesh's own. Never on a shape whose alpha
+                                          is transparency */
+        std::vector<std::string> neutralizeVertexAlphaSkip; /**< Lower case wildcard patterns (* and ?) over the
+                                                               EditorIDs of the statics (base records) whose
+                                                               shapes keep the mesh's alpha all the same; none
+                                                               by default */
+        bool roofShelter {}; /**< Whether vertex alpha is multiplied down to keep the projection out from under
+                                cover */
         float shelterFade {}; /**< World units over which it fades out under cover */
-        bool shelterVertMult {}; /**< Whether the shelter multiplies the mesh's vertex alpha - a mask its author
-                                    painted stays a mask, and only loses more under cover - rather than replacing
-                                    it outright, the alpha then being the shelter's alone, 1 in the open */
 
         /**
          * @brief The name with the file it came from: two files may well share a name
@@ -179,9 +188,11 @@ private:
     constexpr static bool DEFAULT_PBR = false;
     constexpr static bool DEFAULT_PATCH_MATERIAL = true;
     constexpr static bool DEFAULT_NEUTRALIZE_VERTEX_COLORS = true;
+    constexpr static bool DEFAULT_NEUTRALIZE_VERTEX_ALPHA = true; /**< The roof shelter decides what lies under
+                                                                     cover; a mask painted for the game's own
+                                                                     projection is in its way */
     constexpr static bool DEFAULT_ROOF_SHELTER = true;
     constexpr static float DEFAULT_SHELTER_FADE = 64.0F; /**< About how far wind carries snow in under an eave */
-    constexpr static bool DEFAULT_SHELTER_VERT_MULT = true; /**< Multiply: what a mesh's author painted is kept */
     constexpr static float MAX_SHELTER_FADE = 128.0F; /**< The shelter mask has been checked over 0 to 128 (0 a hard
                                                         edge, 32 and 96 in game); every covered vertex searches
                                                         this far for open sky, and past it the open vertices the

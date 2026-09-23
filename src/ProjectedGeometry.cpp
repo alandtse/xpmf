@@ -1,9 +1,12 @@
 #include "ProjectedGeometry.hpp"
 
 #include "ConfigLoader.hpp"
+#include "EditorIdLookup.hpp"
+#include "MaterialClassifier.hpp"
 #include "ProjectedVertexData.hpp"
 #include "SeasonsOfSkyrim.hpp"
 #include "ShelterMap.hpp"
+#include "Text.hpp"
 #include "VertexLayout.hpp"
 
 #include "PCH.h"
@@ -19,11 +22,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <format>
 #include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
+#include <string>
 #include <thread>
 #include <unordered_set>
 #include <utility>
@@ -126,7 +131,9 @@ auto ProjectedGeometry::isWanted() -> bool
 void ProjectedGeometry::install()
 {
     if (!isWanted()) {
-        spdlog::info("Nothing for the Clone3D hooks to do (no profile has neutralizeVertexColors or roofShelter on)");
+        spdlog::info(
+            "Nothing for the Clone3D hooks to do (no profile has neutralizeVertexColors, neutralizeVertexAlpha or "
+            "roofShelter on)");
         return;
     }
 
@@ -161,6 +168,7 @@ void ProjectedGeometry::onMaterialsReady(Materials materials,
                      found->second.profile->name,
                      found->second.untouched ? " (its record was left untouched, so its color is too)" : "");
     }
+    findKeptAlpha();
     s_ready.store(true, std::memory_order_release);
     if (!ConfigLoader::isAnyGeometryChanged()) {
         return; // no cell pass: only the clones' projection color is this class's to look after
@@ -184,12 +192,15 @@ void ProjectedGeometry::onMaterialsReady(Materials materials,
     }
     requestSlice();
     for (const auto& profile : ConfigLoader::getProfiles()) {
-        spdlog::info("Geometry pass: profile '{}' has {} material objects (vertex colors: {}, roof shelter: {})",
-                     profile.name,
-                     std::ranges::count_if(s_materials,
-                                           [&](const auto& item) -> bool { return item.second.profile == &profile; }),
-                     profile.neutralizeVertexColors,
-                     profile.roofShelter);
+        spdlog::info(
+            "Geometry pass: profile '{}' has {} material objects (vertex colors: {}, neutralize vertex alpha: {}, "
+            "roof shelter: {})",
+            profile.name,
+            std::ranges::count_if(s_materials,
+                                  [&](const auto& item) -> bool { return item.second.profile == &profile; }),
+            profile.neutralizeVertexColors,
+            profile.neutralizeVertexAlpha,
+            profile.roofShelter);
     }
 }
 
@@ -210,8 +221,99 @@ auto ProjectedGeometry::treatmentOf(const RE::BGSMaterialObject* material) -> co
 
 auto ProjectedGeometry::withGeometry(const Treatment& treatment) -> const Treatment*
 {
-    // A profile with both of its geometry settings off wants its statics left alone
-    return treatment.profile->neutralizeVertexColors || treatment.profile->roofShelter ? &treatment : nullptr;
+    // A profile with all three of its geometry settings off wants its statics left alone
+    const auto& profile = *treatment.profile;
+    return profile.neutralizeVertexColors || profile.neutralizeVertexAlpha || profile.roofShelter ? &treatment
+                                                                                                  : nullptr;
+}
+
+auto ProjectedGeometry::neutralizesAlphaOf(const Treatment& treatment,
+                                           const RE::TESForm* base) -> bool
+{
+    if (!treatment.profile->neutralizeVertexAlpha) {
+        return false;
+    }
+    const auto kept = s_keptAlpha.find(treatment.profile);
+    return kept == s_keptAlpha.end() || base == nullptr || !kept->second.contains(base);
+}
+
+void ProjectedGeometry::findKeptAlpha()
+{
+    constexpr std::size_t NAMED = 100; /**< Statics listed in the log per profile; the rest are only counted */
+    auto* const dataHandler = RE::TESDataHandler::GetSingleton();
+    if (dataHandler == nullptr) {
+        return;
+    }
+    for (const auto& profile : ConfigLoader::getProfiles()) {
+        if (!profile.neutralizeVertexAlpha || profile.neutralizeVertexAlphaSkip.empty()) {
+            continue;
+        }
+        // The statics that carry one of the profile's materials - and, where Seasons of Skyrim's
+        // winter snow is treated as this profile, any static, movable static or container, since
+        // that snow goes on whatever Seasons of Skyrim decides
+        const bool winter = s_winterSnow != nullptr && s_winterSnow->second.profile == &profile;
+        auto& kept = s_keptAlpha[&profile];
+
+        // How many statics each pattern names: one that names none is likely a typo
+        struct PatternUse {
+            const std::string* pattern {};
+            std::size_t statics {};
+        };
+        std::vector<PatternUse> uses;
+        uses.reserve(profile.neutralizeVertexAlphaSkip.size());
+        for (const auto& pattern : profile.neutralizeVertexAlphaSkip) {
+            uses.push_back({.pattern = &pattern});
+        }
+        std::string names;
+        const auto consider = [&](const RE::TESForm* form) -> void {
+            const std::string editorId = EditorIdLookup::find(form);
+            if (editorId.empty()) {
+                return;
+            }
+            const std::string lowerId = Text::toLower(editorId);
+            for (auto& use : uses) {
+                if (!MaterialClassifier::matches(*use.pattern, lowerId)) {
+                    continue;
+                }
+                ++use.statics;
+                if (kept.insert(form).second && kept.size() <= NAMED) {
+                    names += std::format("{}{} [{:08X}]", names.empty() ? "" : ", ", editorId, form->GetFormID());
+                }
+                break;
+            }
+        };
+        for (const auto* const stat : dataHandler->GetFormArray<RE::TESObjectSTAT>()) {
+            if (stat == nullptr) {
+                continue;
+            }
+            const auto found = s_materials.find(stat->data.materialObj);
+            if (winter || (found != s_materials.end() && found->second.profile == &profile)) {
+                consider(stat);
+            }
+        }
+        if (winter) {
+            for (const auto* const movable : dataHandler->GetFormArray<RE::BGSMovableStatic>()) {
+                consider(movable);
+            }
+            for (const auto* const container : dataHandler->GetFormArray<RE::TESObjectCONT>()) {
+                consider(container);
+            }
+        }
+        for (const auto& use : uses) {
+            if (use.statics == 0) {
+                spdlog::warn("Profile '{}': neutralizeVertexAlphaSkip pattern '{}' names no static that carries one of "
+                             "its material objects",
+                             profile.label(),
+                             *use.pattern);
+            }
+        }
+        spdlog::info("Profile '{}': neutralizeVertexAlphaSkip keeps the vertex alpha of {} statics{}{}{}",
+                     profile.label(),
+                     kept.size(),
+                     kept.empty() ? "" : ": ",
+                     names,
+                     kept.size() > NAMED ? std::format(", and {} more", kept.size() - NAMED) : "");
+    }
 }
 
 //
@@ -235,9 +337,9 @@ auto ProjectedGeometry::Clone3DHook::thunk(RE::TESBoundObject* base,
     }
     // Seasons of Skyrim's winter snow first: it goes over whatever the base form's own material
     // had the engine project
-    if (!dressWinterSnow(*root)) {
+    if (!dressWinterSnow(*root, stat)) {
         if (const auto* const treatment = treatmentOf(stat->data.materialObj); treatment != nullptr) {
-            dressClone(*root, *treatment);
+            dressClone(*root, *treatment, neutralizesAlphaOf(*treatment, stat));
         }
     }
 
@@ -265,19 +367,20 @@ auto ProjectedGeometry::WinterClone3DHook<N>::thunk(RE::TESBoundObject* base,
 {
     auto* const root = s_func(base, ref, arg3);
     if (root != nullptr && s_ready.load(std::memory_order_acquire)) {
-        dressWinterSnow(*root);
+        dressWinterSnow(*root, ref != nullptr ? ref->GetBaseObject() : nullptr);
     }
     return root;
 }
 
-auto ProjectedGeometry::dressWinterSnow(RE::NiAVObject& root) -> bool
+auto ProjectedGeometry::dressWinterSnow(RE::NiAVObject& root,
+                                        const RE::TESForm* base) -> bool
 {
     if (s_winterSnow == nullptr || !SeasonsOfSkyrim::hasWinterSnow(root)) {
         return false;
     }
     adoptWinterSnow(root);
     if (const auto* const treatment = withGeometry(s_winterSnow->second); treatment != nullptr) {
-        dressClone(root, *treatment);
+        dressClone(root, *treatment, neutralizesAlphaOf(*treatment, base));
     }
     return true;
 }
@@ -319,7 +422,8 @@ void ProjectedGeometry::adoptWinterSnow(RE::NiAVObject& root)
 }
 
 void ProjectedGeometry::dressClone(RE::NiAVObject& root,
-                                   const Treatment& treatment)
+                                   const Treatment& treatment,
+                                   bool neutralizeAlpha)
 {
     forEachLeaf(root, K_MAX_NODES_PER_REF, false, [&](RE::NiAVObject& object) -> void {
         // Only shapes the engine just put projected snow on, and only ones that show their
@@ -335,7 +439,7 @@ void ProjectedGeometry::dressClone(RE::NiAVObject& root,
                                                       .keepAlpha = shape->keepAlpha,
                                                       .neutralize = treatment.profile->neutralizeVertexColors,
                                                       .shelter = treatment.profile->roofShelter,
-                                                      .multiplyAlpha = treatment.profile->shelterVertMult};
+                                                      .neutralizeAlpha = neutralizeAlpha};
         if (auto* const variant = ProjectedVertexData::shared(description); variant != nullptr) {
             ProjectedVertexData::install(*shape->shape, variant);
         }
@@ -915,6 +1019,7 @@ void ProjectedGeometry::collectReference(RE::TESObjectREFR& ref)
     if (!shelter && !snowed) {
         return;
     }
+    const bool neutralizeAlpha = snowed && neutralizesAlphaOf(*treatment, base);
 
     // Whether the Snow shader flag went on next to Projected_UV: the engine goes by the material's
     // snow flag, Seasons of Skyrim always sets it
@@ -972,7 +1077,7 @@ void ProjectedGeometry::collectReference(RE::TESObjectREFR& ref)
                        .keepAlpha = shape->keepAlpha,
                        .neutralize = treatment->profile->neutralizeVertexColors,
                        .shelter = treatment->profile->roofShelter,
-                       .multiplyAlpha = treatment->profile->shelterVertMult},
+                       .neutralizeAlpha = neutralizeAlpha},
              .current = shape->data,
              .projected = shape->shader->flags.any(ShaderFlag::kProjectedUV),
              .currentFingerprint = ProjectedVertexData::fingerprintOf(shape->data),
@@ -1300,8 +1405,8 @@ auto ProjectedGeometry::run(ReceiverJob& job) -> ReceiverResult
         }
 
         // The shelter's alpha value per vertex: 1 in the open and less under cover, which the
-        // mesh's alpha is multiplied by (shelterVertMult, so that a mask the mesh's author
-        // painted stays what it is and only ever loses more) or replaced by. Alpha only means
+        // alpha the shape starts from - the mesh's own, so that a mask its author painted only
+        // ever loses more, or 1 where the profile neutralizes it - is multiplied by. Alpha only means
         // something relative to what the shader compares it with: a surface facing up by
         // `facing`, at an alpha of 1, has just lost its snow at (threshold + K_BLEND_FLOOR) /
         // facing, so openness 0..1 is mapped onto [that, 1] - the same openness then means the
@@ -1356,8 +1461,7 @@ auto ProjectedGeometry::run(ReceiverJob& job) -> ReceiverResult
                 // Such a shape paints no alpha (all 1), so the lowest value is the lowest alpha it gets
                 alphaThreshold = scaledAlphaThreshold(receiver.alphaThreshold, *std::ranges::min_element(values));
             }
-            if (receiver.projected
-                && ProjectedVertexData::fingerprint(values, receiver.shape.multiplyAlpha) == receiver.currentFingerprint
+            if (receiver.projected && ProjectedVertexData::fingerprint(values) == receiver.currentFingerprint
                 && alphaThreshold == receiver.currentAlphaThreshold) {
                 continue; // what it already has
             }

@@ -51,7 +51,9 @@ namespace XPMF {
  * Shaders' True PBR has a configuration for the material (PbrMaterialObjects). Patterns are case
  * insensitive, * stands for any run of characters and ? for any one; a pattern without either is
  * an exact EditorID. They had better be anchored where a word is short: "*ash*" is also in
- * splash, trash and wash, and "*ashmaterial*" still in SplashMaterial.
+ * splash, trash and wash, and "*ashmaterial*" still in SplashMaterial. The same patterns name
+ * the statics a profile's neutralizeVertexAlphaSkip is about, by their own EditorIDs (see
+ * ProjectedGeometry).
  *
  * Of the profiles that match, the material belongs to the most specific one: the one whose
  * matching pattern has the most literal characters ("SnowMaterialFarm" over "SnowMaterial*" over

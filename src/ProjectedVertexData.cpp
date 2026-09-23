@@ -42,17 +42,21 @@ auto ProjectedVertexData::shared(const Shape& shape) -> Data*
     if (shape.source == nullptr) {
         return nullptr;
     }
-    // A profile that replaces the alpha rather than multiplying it wants it at 1 to begin with on
-    // every shape whose alpha is free to be written; one that multiplies leaves it as the mesh has it
-    const bool resetAlpha = shape.shelter && !shape.multiplyAlpha && !shape.keepAlpha;
-    if (!resetAlpha && (!shape.colorsEnabled || !shape.neutralize)) {
-        // Colors the shader ignores tint nothing, colors the profile leaves alone need no
-        // variant, and the mesh's alpha stays what it is
+    // Colors the shader ignores tint nothing and mask nothing - to it the alpha is 1 already - so
+    // such a shape needs no variant. One that shows them gets its alpha reset where the profile
+    // neutralizes the alpha (unless it is transparency), and its colors whitened where it
+    // neutralizes the colors
+    if (!shape.colorsEnabled) {
         addRef(shape.source);
         return shape.source;
     }
+    const bool resetAlpha = shape.neutralizeAlpha && !shape.keepAlpha;
+    if (!resetAlpha && !shape.neutralize) {
+        addRef(shape.source); // the mesh's colors and alpha stay what they are
+        return shape.source;
+    }
 
-    const SharedKey key {.source = shape.source, .resetAlpha = resetAlpha};
+    const SharedKey key {.source = shape.source, .whiten = shape.neutralize, .resetAlpha = resetAlpha};
     const std::scoped_lock lock(s_lock);
     if (const auto found = s_shared.find(key); found != s_shared.end()) {
         addRef(found->second);
@@ -62,7 +66,7 @@ auto ProjectedVertexData::shared(const Shape& shape) -> Data*
     // Built with the lock held: two loader threads cloning the same model at once would
     // otherwise both build it, and a buffer creation is quick
     Recipe recipe;
-    recipe.whiten = !shape.colorsEnabled || shape.neutralize;
+    recipe.whiten = shape.neutralize;
     recipe.resetAlpha = resetAlpha;
 
     Data* const variant = build(shape, recipe);
@@ -73,8 +77,7 @@ auto ProjectedVertexData::shared(const Shape& shape) -> Data*
         // Fresh from the engine with a count of 1: that one is the registry's. The registry also
         // pins the source, whose address is the key the variant is found by.
         addRef(shape.source);
-        s_variants.emplace(variant,
-                           Entry {.source = shape.source, .isShared = true, .colorless = !shape.colorsEnabled});
+        s_variants.emplace(variant, Entry {.source = shape.source, .isShared = true});
     } else {
         addRef(shape.source); // "nothing to change" is remembered too; this pin is the shared map's
     }
@@ -96,10 +99,11 @@ auto ProjectedVertexData::custom(const Shape& shape,
         }
     }
 
+    // Only a shape whose alpha is free to be written gets this far (see ShelterMap::judge), so
+    // it starts from the mesh's own unless the profile neutralizes it or the shader never showed it
     Recipe recipe;
     recipe.whiten = !shape.colorsEnabled || shape.neutralize;
-    recipe.resetAlpha = !shape.colorsEnabled || !shape.multiplyAlpha;
-    recipe.multiply = shape.multiplyAlpha;
+    recipe.resetAlpha = !shape.colorsEnabled || shape.neutralizeAlpha;
     recipe.values = values;
     Data* const variant = build(shape, recipe);
     if (variant == nullptr) {
@@ -118,7 +122,7 @@ auto ProjectedVertexData::custom(const Shape& shape,
     s_variants.emplace(variant,
                        Entry {.source = shape.source,
                               .bytes = bytes,
-                              .fingerprint = fingerprint(values, shape.multiplyAlpha),
+                              .fingerprint = fingerprint(values),
                               .colorless = !shape.colorsEnabled});
     s_privateBytes += bytes;
     return variant;
@@ -145,12 +149,10 @@ auto ProjectedVertexData::fingerprintOf(const Data* data) -> std::uint64_t
     return found != s_variants.end() ? found->second.fingerprint : 0;
 }
 
-auto ProjectedVertexData::fingerprint(std::span<const std::uint8_t> values,
-                                      bool multiply) -> std::uint64_t
+auto ProjectedVertexData::fingerprint(std::span<const std::uint8_t> values) -> std::uint64_t
 {
     constexpr std::uint64_t OFFSET_BASIS = 0xCBF29CE484222325ULL;
-    constexpr std::uint64_t MULTIPLY_BASIS = 0x84222325CBF29CE4ULL; /**< The same values, the other meaning */
-    const std::uint64_t hash = hashBytes(values, multiply ? MULTIPLY_BASIS : OFFSET_BASIS);
+    const std::uint64_t hash = hashBytes(values, OFFSET_BASIS);
     return hash != 0 ? hash : 1; // 0 means "not a private variant"
 }
 
@@ -235,8 +237,9 @@ void ProjectedVertexData::collectGarbage()
 
 auto ProjectedVertexData::SharedKeyHash::operator()(const SharedKey& key) const noexcept -> std::size_t
 {
-    constexpr std::size_t RESET_SALT = 0x517CC1B727220A95ULL; /**< So the two keys of one source never collide */
-    return std::hash<const Data*> {}(key.source) ^ (key.resetAlpha ? RESET_SALT : 0);
+    constexpr std::size_t WHITEN_SALT = 0x9E3779B97F4A7C15ULL; /**< So the keys of one source never collide */
+    constexpr std::size_t RESET_SALT = 0x517CC1B727220A95ULL;
+    return std::hash<const Data*> {}(key.source) ^ (key.whiten ? WHITEN_SALT : 0) ^ (key.resetAlpha ? RESET_SALT : 0);
 }
 
 auto ProjectedVertexData::build(const Shape& shape,
@@ -278,15 +281,10 @@ auto ProjectedVertexData::build(const Shape& shape,
             color[RGB] = VertexLayout::COLOR_MAX;
         }
         if (!recipe.values.empty()) {
-            if (recipe.multiply) {
-                // The mesh's alpha scaled, rounded to nearest: a mask its author painted is kept,
-                // and only ever lowered further
-                const std::uint32_t scaled = static_cast<std::uint32_t>(color[RGB]) * recipe.values[index];
-                color[RGB]
-                    = static_cast<std::uint8_t>((scaled + (VertexLayout::COLOR_MAX / 2)) / VertexLayout::COLOR_MAX);
-            } else {
-                color[RGB] = recipe.values[index]; // the shelter's alone
-            }
+            // The alpha scaled, rounded to nearest: a mask the mesh's author painted is (where it
+            // was kept) only ever lowered further, and a reset one becomes the shelter's alone
+            const std::uint32_t scaled = static_cast<std::uint32_t>(color[RGB]) * recipe.values[index];
+            color[RGB] = static_cast<std::uint8_t>((scaled + (VertexLayout::COLOR_MAX / 2)) / VertexLayout::COLOR_MAX);
         }
         changed = changed || !std::ranges::equal(before, color);
     }
