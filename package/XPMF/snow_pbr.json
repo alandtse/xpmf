@@ -1,4 +1,5 @@
 {
+    "$schema": "https://raw.githubusercontent.com/hakasapl/xpmf/main/schema/profile.schema.json",
     "name": "snow",
     "editorIds": [
         "*snow*"
@@ -18,5 +19,6 @@
         "BDS_FarmLumbermill01Snow"
     ],
     "roofShelter": true,
-    "shelterFade": 64
+    "shelterFade": 64,
+    "specularMult": 0
 }

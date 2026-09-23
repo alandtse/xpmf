@@ -36,9 +36,10 @@ namespace XPMF {
  * three lines long. What is there is validated strictly: a field has to have its type (and its
  * range), and a file with any problem at all is rejected as a whole, with every reason in one
  * error in the log - half a profile is not something anyone asked for. Keys that are not settings
- * only earn a warning, a "comment" key being the one way to leave a note in JSON. Without the
- * folder the built-in profiles (ash, snow) apply; with it, exactly the valid files in it do -
- * deleting ash.json is how ash is left alone.
+ * only earn a warning; "comment" (a note) and "$schema" (an editor's pointer to the JSON schema
+ * in the repository, schema/profile.schema.json, which describes every setting) do not even
+ * that. Without the folder the built-in profiles (ash, snow) apply; with it, exactly the valid
+ * files in it do - deleting ash.json is how ash is left alone.
  */
 class ConfigLoader {
 public:

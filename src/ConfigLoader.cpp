@@ -297,8 +297,14 @@ public:
     [[nodiscard]] auto problems() const -> const std::vector<std::string>& { return m_problems; }
 
     /**
-     * @brief Keys nothing asked for. Not a reason to reject a file - a "comment" key is the only
-     * way to leave a note in JSON - but worth a warning: in a hand edited file it is usually a typo
+     * @brief A key that is no setting but has every right to be there - "$schema" for an editor,
+     * "comment" for a person - so that nobody warns about it either
+     */
+    void allowed(const char* key) { find(key, false); }
+
+    /**
+     * @brief Keys nothing asked for. Not a reason to reject a file, but worth a warning: in a hand
+     * edited file it is usually a typo
      */
     [[nodiscard]] auto unknownKeys() const -> std::vector<std::string>
     {
@@ -437,6 +443,9 @@ void ConfigLoader::loadConfig()
             profile.shelterFade = fields.number("shelterFade", 0.0F, MAX_SHELTER_FADE, DEFAULT_SHELTER_FADE);
             // The mesh's specular on the shapes the projection is on (ProjectedGeometry)
             profile.specularMult = fields.optionalNumberBetween("specularMult", 0.0, MAX_SPECULAR_MULT);
+            // An editor's pointer to schema/profile.schema.json, and a note
+            fields.allowed("$schema");
+            fields.allowed("comment");
 
             if (!accept(fields, path.filename().string())) {
                 continue;

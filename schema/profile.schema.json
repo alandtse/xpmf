@@ -1,0 +1,142 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://raw.githubusercontent.com/hakasapl/xpmf/main/schema/profile.schema.json",
+    "title": "XPMF profile",
+    "description": "One XPMF profile: which single pass material objects it is about, and what is done for them and for the shapes of the statics that carry them. One profile per file in Data/SKSE/Plugins/XPMF/*.json. A material object that several profiles match belongs to the one whose matching pattern is most specific (most literal characters, then fewest wildcards), then to a pbr profile over a general one, then to the first file name in alphabetical order. Only name and editorIds are required. A file with a wrongly typed or out-of-range value is rejected as a whole, with every reason in one log line; a key that is not a setting is ignored with a warning.",
+    "type": "object",
+    "required": ["name", "editorIds"],
+    "additionalProperties": false,
+    "properties": {
+        "$schema": {
+            "type": "string",
+            "description": "Lets an editor validate the file against this schema. Ignored by XPMF."
+        },
+        "comment": {
+            "type": "string",
+            "description": "A note for whoever reads the file. Ignored by XPMF."
+        },
+        "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The profile's name, for the log. Two files may share one; the log adds the file name."
+        },
+        "editorIds": {
+            "$ref": "#/definitions/patternList",
+            "description": "Which material objects the profile is about: patterns over their EditorIDs. Every vanilla snow material contains \"Snow\" (\"*snow*\" takes them all), every vanilla ash material starts with \"AshMaterial\", \"DLC2AshMaterial\" or \"AshLODMaterial\". An empty list matches nothing."
+        },
+        "excludeEditorIds": {
+            "$ref": "#/definitions/patternListOrNull",
+            "description": "Material objects that match one of these as well are not the profile's. None by default."
+        },
+        "pbr": {
+            "type": "boolean",
+            "default": false,
+            "description": "Only material objects Community Shaders' True PBR has a configuration for (Data/PBRMaterialObjects/<EditorID>.json), and the profile's textures are PBR ones. A pbr profile is the one kind that patches such a record; any other profile leaves such a record untouched and only treats its shapes."
+        },
+        "diffuseTexture": {
+            "$ref": "#/definitions/texture",
+            "description": "The texture the projection shows instead of the game's ProjectedDiffuse: usually the landscape's own snow or ash texture, so that a covered object matches the ground next to it. Empty, null, absent, or the game's own path = not replaced."
+        },
+        "normalTexture": {
+            "$ref": "#/definitions/texture",
+            "description": "Its normal map, instead of the game's ProjectedNormal. Empty, null, absent, or the game's own path = not replaced."
+        },
+        "noiseTexture": {
+            "$ref": "#/definitions/texture",
+            "description": "The coverage noise, instead of the game's ProjectedNoise. Empty, null, absent, or the game's own path = not replaced."
+        },
+        "detailNormalTexture": {
+            "$ref": "#/definitions/texture",
+            "description": "The detail normal, instead of the game's ProjectedNormalDetail. Empty, null, absent, or the game's own path = not replaced."
+        },
+        "isSnow": {
+            "type": ["boolean", "null"],
+            "default": null,
+            "description": "The material objects' Snow flag: on for the snow shading (sparkle and rim light on the covered parts), off for ash. null or absent = as each record has it."
+        },
+        "falloffScale": {
+            "type": ["number", "null"],
+            "default": null,
+            "description": "The material objects' falloff scale: how far the coverage noise raises what a surface has to face up by, the patches the projection is missing from. 0.25 to 0.5 on the vanilla snow materials. null or absent = as each record has it."
+        },
+        "falloffBias": {
+            "type": ["number", "null"],
+            "default": null,
+            "description": "The material objects' falloff bias: what a surface has to face up by before the noise, how much of it is covered at all. 0.4 on the vanilla snow materials, up to 0.82 on the \"Light\" ones that are a dusting. null or absent = as each record has it."
+        },
+        "noiseUVScale": {
+            "type": ["number", "null"],
+            "exclusiveMinimum": 0,
+            "default": null,
+            "description": "The material objects' noise UV scale: world units per tile of the coverage noise, and, the shader tiling the projected textures at a fixed ratio to it, of the profile's textures. 20 to 1500 on the vanilla materials. null or absent = as each record has it."
+        },
+        "maxAngle": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 180,
+            "default": null,
+            "description": "The max angle, in degrees, written into every static that carries one of the profile's patched material objects: the projection needs a surface to face up by more than the cosine of it before the noise has its say. Vanilla statics use 30 to 120 (the Creation Kit's \"30-90\" is only a hint; Nordic ruins and word walls sit at 120). null or absent = each static's own."
+        },
+        "neutralizeVertexColors": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether shapes that carry the projection get white vertex colors, so that the colors a mesh's author painted (usually baked shadow) do not darken the snow."
+        },
+        "neutralizeVertexColorsSkip": {
+            "$ref": "#/definitions/patternListOrNull",
+            "description": "Patterns over the EditorIDs of the statics (base records) whose shapes keep their vertex colors all the same. None by default."
+        },
+        "neutralizeVertexAlpha": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether shapes that carry the projection start from a vertex alpha of 1, discarding a mask the mesh's author painted against the game's own projection, rather than from the mesh's own. Never on a shape whose alpha is transparency."
+        },
+        "neutralizeVertexAlphaSkip": {
+            "$ref": "#/definitions/patternListOrNull",
+            "description": "Patterns over the EditorIDs of the statics whose shapes keep the mesh's vertex alpha all the same, for a mask that is wanted (the farmhouse walkways of Better Dynamic Snow, say). None by default."
+        },
+        "roofShelter": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether the vertex alpha is multiplied down to keep the projection out from under cover: roofs, overhangs, anything a static puts over another."
+        },
+        "roofShelterSkip": {
+            "$ref": "#/definitions/patternListOrNull",
+            "description": "Patterns over the EditorIDs of the statics whose shapes stay covered under a roof. None by default."
+        },
+        "shelterFade": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 128,
+            "default": 64,
+            "description": "World units over which the projection fades out under cover: 0 is a hard edge at the drip line, 64 about how far wind carries snow in under an eave."
+        },
+        "specularMult": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 10,
+            "default": null,
+            "description": "What the specular strength of every shape the projection is on is multiplied by, on a copy of the shape's material: 0 takes the highlight off, 1 leaves it. Without the Snow flag the shader lights covered pixels with the mesh's own specular, which is how a glossy mesh makes glossy snow; with the flag it uses the snow rim light instead. null or absent = as the mesh has it."
+        }
+    },
+    "definitions": {
+        "pattern": {
+            "type": "string",
+            "description": "A wildcard pattern matched against a whole EditorID, case insensitive: * stands for any run of characters, ? for any one; without either it is an exact EditorID. Anchor short words: \"*ash*\" is also in splash, trash and wash. Blank entries are dropped."
+        },
+        "patternList": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/pattern" }
+        },
+        "patternListOrNull": {
+            "oneOf": [
+                { "$ref": "#/definitions/patternList" },
+                { "type": "null" }
+            ]
+        },
+        "texture": {
+            "type": ["string", "null"],
+            "description": "A texture path relative to Data, in any case, with any slashes, with or without a leading textures/ and a trailing .dds: \"textures/landscape/snow01.dds\", \"landscape\\\\snow01\" and \"Data/textures/landscape/snow01.dds\" all name the same file. Loose files, archives and a mod manager's virtual folder all work."
+        }
+    }
+}
