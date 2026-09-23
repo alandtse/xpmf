@@ -119,12 +119,13 @@ auto parseFile(const std::filesystem::path& path) -> std::optional<Json>
 /**
  * @brief Reads the fields of one JSON object and keeps a list of everything that is wrong with them
  *
- * Validation is strict: every field has to be there (the few that may be left out say so) and
- * has to have its type, and a file with any problem at all is rejected as a whole - half a
- * profile is not something anyone asked for, and a field that silently fell back to a default is
- * a bug report waiting to be written. So the readers below never fail; they note the problem and
- * return something harmless, and the caller looks at problems() once it has asked for every
- * field, which lets the log name all of a file's mistakes at once rather than one per game start.
+ * Validation is strict about what is there: a field that is present has to have its type, and
+ * a file with any problem at all is rejected as a whole - half a profile is not something anyone
+ * asked for. A field that is left out falls back to the default the reader is handed, except
+ * with the readers that say the field is required. The readers never fail; they note the
+ * problem and return something harmless, and the caller looks at problems() once it has asked
+ * for every field, which lets the log name all of a file's mistakes at once rather than one per
+ * game start.
  */
 class Fields {
 public:
@@ -133,35 +134,11 @@ public:
     {
     }
 
-    [[nodiscard]] auto boolean(const char* key) -> bool
-    {
-        const auto* const value = find(key);
-        if (value != nullptr && !value->is_boolean()) {
-            return wrong<bool>(key, "true or false");
-        }
-        return value != nullptr && value->get<bool>();
-    }
-
     /**
-     * @brief true, false, or null for "no opinion"
+     * @brief true or false; fallback when the key is left out or null
      */
-    [[nodiscard]] auto optionalBoolean(const char* key) -> std::optional<bool>
-    {
-        const auto* const value = find(key);
-        if (value == nullptr || value->is_null()) {
-            return std::nullopt;
-        }
-        if (!value->is_boolean()) {
-            return wrong<std::optional<bool>>(key, "true, false or null");
-        }
-        return value->get<bool>();
-    }
-
-    /**
-     * @brief true or false, or fallback when the key is left out or null
-     */
-    [[nodiscard]] auto booleanOr(const char* key,
-                                 bool fallback) -> bool
+    [[nodiscard]] auto boolean(const char* key,
+                               bool fallback) -> bool
     {
         const auto* const value = find(key, false);
         if (value == nullptr || value->is_null()) {
@@ -173,18 +150,37 @@ public:
         return value->get<bool>();
     }
 
+    /**
+     * @brief true, false, or "no opinion" for null or a key left out
+     */
+    [[nodiscard]] auto optionalBoolean(const char* key) -> std::optional<bool>
+    {
+        const auto* const value = find(key, false);
+        if (value == nullptr || value->is_null()) {
+            return std::nullopt;
+        }
+        if (!value->is_boolean()) {
+            return wrong<std::optional<bool>>(key, "true, false, null, or left out");
+        }
+        return value->get<bool>();
+    }
+
+    /**
+     * @brief A number in range; fallback when the key is left out or null
+     */
     [[nodiscard]] auto number(const char* key,
                               float lowest,
-                              float highest) -> float
+                              float highest,
+                              float fallback) -> float
     {
-        const auto* const value = find(key);
-        if (value == nullptr) {
-            return lowest;
+        const auto* const value = find(key, false);
+        if (value == nullptr || value->is_null()) {
+            return fallback;
         }
         // Anything that is not a plain finite number in range, NaN included, fails the comparison
         const double parsed = value->is_number() ? value->get<double>() : std::nan("");
         if (!(parsed >= lowest && parsed <= highest)) {
-            return wrong<float>(key, std::format("a number from {} to {}", lowest, highest));
+            return wrong<float>(key, std::format("a number from {} to {}, or left out", lowest, highest));
         }
         return static_cast<float>(parsed);
     }
@@ -224,18 +220,22 @@ public:
     }
 
     /**
+     * @brief A list of strings, which has to be there unless it may be left out (then: none)
+     *
      * @return std::vector<std::string> Trimmed; entries that are blank are dropped
      */
-    [[nodiscard]] auto strings(const char* key) -> std::vector<std::string>
+    [[nodiscard]] auto strings(const char* key,
+                               bool required) -> std::vector<std::string>
     {
         std::vector<std::string> entries;
-        const auto* const value = find(key);
-        if (value == nullptr) {
+        const auto* const value = find(key, required);
+        if (value == nullptr || (!required && value->is_null())) {
             return entries;
         }
         if (!value->is_array()
             || !std::ranges::all_of(*value, [](const Json& item) -> bool { return item.is_string(); })) {
-            return wrong<std::vector<std::string>>(key, "a list of strings");
+            return wrong<std::vector<std::string>>(key,
+                                                   required ? "a list of strings" : "a list of strings, or left out");
         }
         for (const auto& item : *value) {
             if (const auto entry = trim(item.get_ref<const std::string&>()); !entry.empty()) {
@@ -353,23 +353,24 @@ void ConfigLoader::loadConfig()
             Profile profile;
             profile.file = Text::toLower(path.filename().string());
             profile.name = fields.string("name");
-            for (const auto& pattern : fields.strings("editorIds")) {
+            // Only the name and the patterns have to be there; everything else has a default
+            for (const auto& pattern : fields.strings("editorIds", true)) {
                 profile.editorIds.push_back(Text::toLower(toGameCodePage(pattern)));
             }
-            for (const auto& pattern : fields.strings("excludeEditorIds")) {
+            for (const auto& pattern : fields.strings("excludeEditorIds", false)) {
                 profile.excludeEditorIds.push_back(Text::toLower(toGameCodePage(pattern)));
             }
-            profile.pbr = fields.boolean("pbr");
-            profile.patchMaterial = fields.boolean("patchMaterial");
+            profile.pbr = fields.boolean("pbr", DEFAULT_PBR);
+            profile.patchMaterial = fields.boolean("patchMaterial", DEFAULT_PATCH_MATERIAL);
             profile.diffuseTexture = normalizeTexturePath(fields.optionalString("diffuseTexture"));
             profile.normalTexture = normalizeTexturePath(fields.optionalString("normalTexture"));
             profile.noiseTexture = normalizeTexturePath(fields.optionalString("noiseTexture"));
             profile.detailNormalTexture = normalizeTexturePath(fields.optionalString("detailNormalTexture"));
             profile.isSnow = fields.optionalBoolean("isSnow");
-            profile.neutralizeVertexColors = fields.boolean("neutralizeVertexColors");
-            profile.roofShelter = fields.boolean("roofShelter");
-            profile.shelterFade = fields.number("shelterFade", 0.0F, MAX_SHELTER_FADE);
-            profile.shelterVertMult = fields.booleanOr("shelterVertMult", DEFAULT_SHELTER_VERT_MULT);
+            profile.neutralizeVertexColors = fields.boolean("neutralizeVertexColors", DEFAULT_NEUTRALIZE_VERTEX_COLORS);
+            profile.roofShelter = fields.boolean("roofShelter", DEFAULT_ROOF_SHELTER);
+            profile.shelterFade = fields.number("shelterFade", 0.0F, MAX_SHELTER_FADE, DEFAULT_SHELTER_FADE);
+            profile.shelterVertMult = fields.boolean("shelterVertMult", DEFAULT_SHELTER_VERT_MULT);
 
             if (!accept(fields, path.filename().string())) {
                 continue;
@@ -449,12 +450,13 @@ auto ConfigLoader::builtInProfiles() -> std::vector<Profile>
     Profile snow;
     snow.name = "snow";
     snow.editorIds = {DEFAULT_SNOW_PATTERN};
-    snow.patchMaterial = true;
+    snow.pbr = DEFAULT_PBR;
+    snow.patchMaterial = DEFAULT_PATCH_MATERIAL;
     snow.diffuseTexture = DEFAULT_SNOW_DIFFUSE;
     snow.normalTexture = DEFAULT_SNOW_NORMAL;
     snow.isSnow = true;
-    snow.neutralizeVertexColors = true;
-    snow.roofShelter = true;
+    snow.neutralizeVertexColors = DEFAULT_NEUTRALIZE_VERTEX_COLORS;
+    snow.roofShelter = DEFAULT_ROOF_SHELTER;
     snow.shelterFade = DEFAULT_SHELTER_FADE;
     snow.shelterVertMult = DEFAULT_SHELTER_VERT_MULT;
 

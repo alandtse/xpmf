@@ -30,14 +30,14 @@ namespace XPMF {
  * in the README rather than in the files.
  *
  * Everything is read once at plugin load (loadConfig) into statics; the getters are plain
- * accessors and never touch the disk. Files are validated strictly: every field but the four
- * textures (and shelterVertMult, which has a default) has to be there and has to have its type
- * and its range, and a file that fails is rejected as a whole, with every reason in one error in
- * the log - half a profile is not
- * something anyone asked for. A texture that is not named is not replaced. Keys that are not
- * settings only earn a warning, a "comment" key being the one way to leave a note in JSON.
- * Without the folder the built-in profiles (ash, snow) apply; with it, exactly the valid files
- * in it do - deleting ash.json is how ash is left alone.
+ * accessors and never touch the disk. Only "name" and "editorIds" have to be there; every other
+ * setting has a default - the shipped snow profile's, except that a texture not named is not
+ * replaced and a Snow flag not given is the record's - so a profile can be three lines long. What is there is validated
+ * strictly: a field has to have its type (and its range), and a file with any problem at all is rejected as a whole,
+ * with every reason in one error in the log - half a profile is not something anyone asked for. Keys that are not
+ * settings only earn a warning, a "comment" key being the one way to leave a note in JSON. Without the folder the
+ * built-in profiles (ash, snow) apply; with it, exactly the valid files in it do - deleting ash.json is how ash is left
+ * alone.
  */
 class ConfigLoader {
 public:
@@ -55,7 +55,7 @@ public:
         std::string file; /**< The file it came from, lower case, for the log; empty for a built-in profile */
         std::vector<std::string> editorIds; /**< Lower case wildcard patterns (* and ?); a material object whose
                                                EditorID matches one belongs to the profile... */
-        std::vector<std::string> excludeEditorIds; /**< ...unless it matches one of these as well */
+        std::vector<std::string> excludeEditorIds; /**< ...unless it matches one of these as well; none by default */
         bool pbr {}; /**< ...and, when set, only if Community Shaders' True PBR has a configuration for it. The
                         one kind of profile that patches such a material object's record: its textures are
                         taken to be made for PBR */
@@ -67,7 +67,8 @@ public:
         std::string noiseTexture; /**< Same for the coverage noise; empty = the game's ProjectedNoise stays */
         std::string detailNormalTexture; /**< Same for the detail normal; empty = the game's ProjectedNormalDetail
                                             stays */
-        std::optional<bool> isSnow; /**< The material objects' Snow flag; std::nullopt = as the record has it */
+        std::optional<bool> isSnow; /**< The material objects' Snow flag; std::nullopt (null in the file, or the
+                                       key left out) = as the record has it */
 
         bool neutralizeVertexColors {}; /**< Whether shapes that carry the projection get white vertex colors */
 
@@ -75,8 +76,7 @@ public:
         float shelterFade {}; /**< World units over which it fades out under cover */
         bool shelterVertMult {}; /**< Whether the shelter multiplies the mesh's vertex alpha - a mask its author
                                     painted stays a mask, and only loses more under cover - rather than replacing
-                                    it outright, the alpha then being the shelter's alone, 1 in the open. The one
-                                    setting with a default (on), so that profiles written before it still load */
+                                    it outright, the alpha then being the shelter's alone, 1 in the open */
 
         /**
          * @brief The name with the file it came from: two files may well share a name
@@ -151,7 +151,12 @@ private:
     constexpr static const char* DEFAULT_ASH_PATTERN_DLC = "dlc2ashmaterial*"; /**< DLC2AshMaterialDusting1P */
     constexpr static const char* DEFAULT_ASH_PATTERN_LOD = "ashlodmaterial*"; /**< AshLODMaterialMtns1P */
 
-    constexpr static float DEFAULT_SHELTER_FADE = 96.0F; /**< About how far wind carries snow in under an eave */
+    // What a profile that leaves a setting out gets: the shipped snow profile's values
+    constexpr static bool DEFAULT_PBR = false;
+    constexpr static bool DEFAULT_PATCH_MATERIAL = true;
+    constexpr static bool DEFAULT_NEUTRALIZE_VERTEX_COLORS = true;
+    constexpr static bool DEFAULT_ROOF_SHELTER = true;
+    constexpr static float DEFAULT_SHELTER_FADE = 64.0F; /**< About how far wind carries snow in under an eave */
     constexpr static bool DEFAULT_SHELTER_VERT_MULT = true; /**< Multiply: what a mesh's author painted is kept */
     constexpr static float MAX_SHELTER_FADE = 128.0F; /**< The shelter mask has been checked over 0 to 128 (0 a hard
                                                         edge, 32 and 96 in game); every covered vertex searches
