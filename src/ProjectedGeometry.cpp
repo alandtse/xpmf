@@ -122,9 +122,10 @@ void forEachLeaf(RE::NiAVObject& root,
 
 auto ProjectedGeometry::isWanted() -> bool
 {
-    // Vertex colors and roof shelter are this class's own business. With Seasons of Skyrim there is
-    // one more thing to do on a clone, for the material part: see adoptWinterSnow
-    return ConfigLoader::isAnyGeometryChanged()
+    // Vertex colors, vertex alpha, roof shelter and specular are this class's own business. With
+    // Seasons of Skyrim there is one more thing to do on a clone, for the material part: see
+    // adoptWinterSnow
+    return ConfigLoader::isAnyGeometryChanged() || ConfigLoader::isAnySpecularChanged()
         || (SeasonsOfSkyrim::isLoaded() && ConfigLoader::isAnyMaterialPatched());
 }
 
@@ -132,8 +133,8 @@ void ProjectedGeometry::install()
 {
     if (!isWanted()) {
         spdlog::info(
-            "Nothing for the Clone3D hooks to do (no profile has neutralizeVertexColors, neutralizeVertexAlpha or "
-            "roofShelter on)");
+            "Nothing for the Clone3D hooks to do (no profile has neutralizeVertexColors, neutralizeVertexAlpha, "
+            "roofShelter or specularMult on)");
         return;
     }
 
@@ -221,10 +222,11 @@ auto ProjectedGeometry::treatmentOf(const RE::BGSMaterialObject* material) -> co
 
 auto ProjectedGeometry::withGeometry(const Treatment& treatment) -> const Treatment*
 {
-    // A profile with all three of its geometry settings off wants its statics left alone
+    // A profile with all of its clone-side settings off wants its statics left alone
     const auto& profile = *treatment.profile;
-    return profile.neutralizeVertexColors || profile.neutralizeVertexAlpha || profile.roofShelter ? &treatment
-                                                                                                  : nullptr;
+    const bool wanted = profile.neutralizeVertexColors || profile.neutralizeVertexAlpha || profile.roofShelter
+        || profile.specularMult.has_value();
+    return wanted ? &treatment : nullptr;
 }
 
 auto ProjectedGeometry::settingsOf(const Treatment& treatment,
@@ -237,7 +239,8 @@ auto ProjectedGeometry::settingsOf(const Treatment& treatment,
     };
     return {.neutralizeColors = profile.neutralizeVertexColors && !named(&Kept::colors),
             .neutralizeAlpha = profile.neutralizeVertexAlpha && !named(&Kept::alpha),
-            .shelter = profile.roofShelter && !named(&Kept::shelter)};
+            .shelter = profile.roofShelter && !named(&Kept::shelter),
+            .specularMult = profile.specularMult};
 }
 
 void ProjectedGeometry::findKept()
@@ -473,8 +476,18 @@ void ProjectedGeometry::dressClone(RE::NiAVObject& root,
                                    const Settings& settings)
 {
     forEachLeaf(root, K_MAX_NODES_PER_REF, false, [&](RE::NiAVObject& object) -> void {
-        // Only shapes the engine just put projected snow on, and only ones that show their
-        // colors: enabling colors on the rest waits for the cell pass, which knows the alpha
+        // Every lit shape the engine just put projected snow on gets the profile's specular...
+        if (settings.specularMult.has_value()) {
+            auto* const geometry = object.AsGeometry();
+            auto* const shader = geometry != nullptr ? netimmerse_cast<RE::BSLightingShaderProperty*>(
+                                                           geometry->GetGeometryRuntimeData().shaderProperty.get())
+                                                     : nullptr;
+            if (shader != nullptr && shader->flags.any(ShaderFlag::kProjectedUV)) {
+                scaleSpecular(*shader, *settings.specularMult);
+            }
+        }
+        // ...and only those that show their colors the shared variant: enabling colors on the
+        // rest waits for the cell pass, which knows the alpha
         const auto shape = view(object);
         if (!shape.has_value() || !shape->shader->flags.all(ShaderFlag::kProjectedUV, ShaderFlag::kVertexColors)) {
             return;
@@ -491,6 +504,28 @@ void ProjectedGeometry::dressClone(RE::NiAVObject& root,
             ProjectedVertexData::install(*shape->shape, variant);
         }
     });
+}
+
+void ProjectedGeometry::scaleSpecular(RE::BSLightingShaderProperty& shader,
+                                      float factor)
+{
+    // A lighting property only ever holds a lighting material, and the engine's RTTI cast would
+    // not know Community Shaders' PBR subclass of it, so the casts are plain
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+    auto* const material = static_cast<RE::BSLightingShaderMaterialBase*>(shader.material);
+    if (material == nullptr) {
+        return;
+    }
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast)
+    auto* const copy = static_cast<RE::BSLightingShaderMaterialBase*>(material->Create());
+    if (copy == nullptr) {
+        return;
+    }
+    copy->CopyMembers(material);
+    copy->specularColorScale *= factor;
+    shader.SetMaterial(copy, true); // copies it once more, into one the property owns
+    copy->~BSLightingShaderMaterialBase();
+    RE::free(copy);
 }
 
 auto ProjectedGeometry::view(RE::NiAVObject& object) -> std::optional<ShapeView>

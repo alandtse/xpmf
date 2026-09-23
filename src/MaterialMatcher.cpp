@@ -44,9 +44,10 @@ auto describeForm(const RE::TESForm& form,
 
 void MaterialMatcher::onDataLoaded()
 {
-    if (!ConfigLoader::isAnyMaterialPatched() && !ConfigLoader::isAnyGeometryChanged()) {
-        spdlog::info("No profile has patchMaterial, neutralizeVertexColors, neutralizeVertexAlpha or roofShelter on: "
-                     "nothing to do");
+    if (!ConfigLoader::isAnyMaterialPatched() && !ConfigLoader::isAnyGeometryChanged()
+        && !ConfigLoader::isAnySpecularChanged()) {
+        spdlog::info("No profile has patchMaterial, neutralizeVertexColors, neutralizeVertexAlpha, roofShelter or "
+                     "specularMult on: nothing to do");
         return;
     }
     if (!EditorIdLookup::isAvailable()) {

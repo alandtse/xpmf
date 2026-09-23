@@ -51,7 +51,8 @@ public:
      * (patchMaterial, the four textures, isSnow, the three falloff values and maxAngle), neutralizeVertexColors,
      * and the vertex alpha (neutralizeVertexAlpha, roofShelter with shelterFade) - and any combination
      * of them works. Each of the three geometry settings comes with a skip list: wildcard patterns
-     * over the EditorIDs of the statics (base records) it is not applied to.
+     * over the EditorIDs of the statics (base records) it is not applied to. A fourth, specularMult,
+     * scales the specular strength of the shapes the projection is on.
      */
     struct Profile {
         std::string name; /**< For the log */
@@ -114,6 +115,13 @@ public:
         std::vector<std::string> roofShelterSkip; /**< Same, for the statics whose shapes stay covered under a
                                                      roof */
         float shelterFade {}; /**< World units over which it fades out under cover */
+        std::optional<float> specularMult; /**< What the specular strength of every shape the projection is on
+                                              is multiplied by, on a copy of the shape's material: 0 takes the
+                                              highlight off, 1 leaves it. Without the Snow flag the shader lights
+                                              covered pixels with the mesh's own specular, which is how a glossy
+                                              mesh makes glossy snow; with the flag it swaps in the snow rim
+                                              light instead (bEnableSnowRimLighting). std::nullopt = as the mesh
+                                              has it */
 
         /**
          * @brief The name with the file it came from: two files may well share a name
@@ -164,6 +172,11 @@ public:
     [[nodiscard]] static auto isAnyGeometryChanged() -> bool;
 
     /**
+     * @brief Whether any profile scales specular, i.e. whether the Clone3D hook is needed for that alone
+     */
+    [[nodiscard]] static auto isAnySpecularChanged() -> bool;
+
+    /**
      * @brief Whether any profile keeps its projection out from under roofs, i.e. whether height maps are needed
      */
     [[nodiscard]] static auto isAnyRoofSheltered() -> bool;
@@ -207,6 +220,7 @@ private:
     constexpr static float DEFAULT_SHELTER_FADE = 64.0F; /**< About how far wind carries snow in under an eave */
     constexpr static double MAX_ANGLE_LIMIT = 180.0; /**< cos(angle) is what the shader compares with; at 180 every
                                                         face is covered and past it there is nothing to say */
+    constexpr static double MAX_SPECULAR_MULT = 10.0; /**< Ten times a mesh's own specular is as far as it goes */
     constexpr static float MAX_SHELTER_FADE = 128.0F; /**< The shelter mask has been checked over 0 to 128 (0 a hard
                                                         edge, 32 and 96 in game); every covered vertex searches
                                                         this far for open sky, and past it the open vertices the

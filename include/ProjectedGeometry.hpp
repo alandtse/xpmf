@@ -37,8 +37,10 @@ namespace XPMF {
  * projection fades, are the settings of the profile its static's material object belongs to -
  * each setting less the statics its skip list names by EditorID (neutralizeVertexColorsSkip,
  * neutralizeVertexAlphaSkip, roofShelterSkip: a mesh whose colors or mask are wanted as they
- * are, a porch that is to stay snowed under its roof), see settingsOf. "Snow" below stands for
- * any of them.
+ * are, a porch that is to stay snowed under its roof), see settingsOf. A fourth setting, specularMult,
+ * scales the specular strength of the shapes the projection is on, since the shader lights a
+ * covered pixel with the mesh's own specular unless the material carries the Snow flag. "Snow"
+ * below stands for any of them.
  *
  * The first pass happens inside TESBoundObject::Clone3D, hooked through TESObjectSTAT's vtable
  * (slot 0x40; statics are the only forms the engine applies a material object to). The engine
@@ -336,6 +338,8 @@ private:
         bool neutralizeColors {}; /**< Its shapes get white vertex colors */
         bool neutralizeAlpha {}; /**< Its shapes start from a vertex alpha of 1 */
         bool shelter {}; /**< Its shapes lose the projection under cover */
+        std::optional<float> specularMult; /**< What its shapes' specular strength is multiplied by; std::nullopt
+                                              leaves it (no skip list: the profile's own value or nothing) */
     };
 
     /**
@@ -368,6 +372,19 @@ private:
      */
     static void dressClone(RE::NiAVObject& root,
                            const Settings& settings);
+
+    /**
+     * @brief Scales the specular strength of a shape's material, on a copy of the material
+     *
+     * The clone shares the model's material with every other instance of the model, snowed or
+     * not, so the shape is given a material of its own first (the way po3's Papyrus Extender
+     * swaps materials: a copy handed to SetMaterial, which copies it once more into one the
+     * property owns). The shader reads the strength at every draw, so nothing is set up again.
+     *
+     * @param factor The profile's specularMult: 1 leaves the strength as it is
+     */
+    static void scaleSpecular(RE::BSLightingShaderProperty& shader,
+                              float factor);
 
     /**
      * @brief Whether any of this class's hooks are needed

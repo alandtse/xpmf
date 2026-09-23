@@ -457,6 +457,8 @@ void ConfigLoader::loadConfig()
             profile.roofShelter = fields.boolean("roofShelter", DEFAULT_ROOF_SHELTER);
             profile.roofShelterSkip = patterns("roofShelterSkip");
             profile.shelterFade = fields.number("shelterFade", 0.0F, MAX_SHELTER_FADE, DEFAULT_SHELTER_FADE);
+            // The mesh's specular on the shapes the projection is on (ProjectedGeometry)
+            profile.specularMult = fields.optionalNumberBetween("specularMult", 0.0, MAX_SPECULAR_MULT);
             // The shelter used to be able to replace the mesh's alpha instead of multiplying it;
             // starting from 1 is neutralizeVertexAlpha's job now, shelter or no shelter
             fields.retired(
@@ -583,6 +585,10 @@ void ConfigLoader::loadConfig()
         spdlog::info("Config Loaded: [{}] Roof Shelter: {}", profile.name, profile.roofShelter);
         spdlog::info("Config Loaded: [{}] Roof Shelter Skip: {}", profile.name, joinList(profile.roofShelterSkip));
         spdlog::info("Config Loaded: [{}] Shelter Fade: {}", profile.name, profile.shelterFade);
+        spdlog::info("Config Loaded: [{}] Specular Mult: {}",
+                     profile.name,
+                     profile.specularMult.has_value() ? std::format("{}", *profile.specularMult)
+                                                      : "(as the mesh has it)");
     }
 }
 
@@ -595,6 +601,12 @@ auto ConfigLoader::isAnyGeometryChanged() -> bool
     return std::ranges::any_of(s_profiles, [](const Profile& profile) -> bool {
         return profile.neutralizeVertexColors || profile.neutralizeVertexAlpha || profile.roofShelter;
     });
+}
+
+auto ConfigLoader::isAnySpecularChanged() -> bool
+{
+    return std::ranges::any_of(s_profiles,
+                               [](const Profile& profile) -> bool { return profile.specularMult.has_value(); });
 }
 
 auto ConfigLoader::isAnyRoofSheltered() -> bool { return std::ranges::any_of(s_profiles, &Profile::roofShelter); }
