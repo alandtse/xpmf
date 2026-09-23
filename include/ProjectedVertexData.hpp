@@ -18,7 +18,7 @@ namespace XPMF {
  * from matching on the three quarters of vanilla snow shapes whose colors darken snow-facing
  * vertices - and alpha scales the projection weight (dot(normal, up) * alpha against the
  * material's threshold), which is the mask one in five of those shapes already uses and the
- * channel the roof shelter writes. Both live in the shape's one interleaved vertex buffer,
+ * channel the roof shelter scales. Both live in the shape's one interleaved vertex buffer,
  * shared by every clone of the model, so changing either for projection-carrying clones only
  * means giving those clones a buffer of their own: a "variant" of the source renderer data with
  * identical positions and topology (the index buffer is shared outright) and different colors.
@@ -27,11 +27,14 @@ namespace XPMF {
  * so they are ordinary renderer data to everything else - the decal builder included, which
  * is why each gets a copy of the source's CPU index list as well.
  *
- * Most shapes with a projection on them share one variant per model and set of settings: white
- * colors (a profile's neutralizeVertexColors), alpha reset to 1 (its roofShelter). Only a shape
- * partly under cover gets a private variant, because only there does the alpha depend on where
- * the instance stands; one entirely under cover gets no variant at all - its projection is
- * switched off and it goes back to the model's own data (see ProjectedGeometry).
+ * Most shapes with a projection on them share one variant per model and profile setting: white
+ * colors (a profile's neutralizeVertexColors), and the alpha as the mesh has it - a mask its
+ * author painted stays a mask (shelterVertMult, the default) - or reset to 1, the alpha then
+ * being the shelter's alone (shelterVertMult off). Only a shape partly under cover gets a private
+ * variant, because only there does the alpha depend on where the instance stands: the mesh's
+ * own multiplied down towards nothing where the cover is deep, or the shelter's own value; one
+ * entirely under cover gets no variant at all - its projection is switched off and it goes back
+ * to the model's own data (see ProjectedGeometry).
  *
  * Whitening is all or nothing per shape. Which vertices end up under snow depends on the
  * instance's orientation, the static's angle, the material and the noise, and guessing at that
@@ -60,13 +63,15 @@ public:
                                   with the flag turned on) has all of them white */
         bool keepAlpha {}; /**< Whether the mesh's vertex alpha is transparency: an alpha property that blends
                               (snow drifts fading into the ground, ...) or tests an alpha the mesh paints. Such
-                              a shape keeps its alpha whatever roofShelter says; resetting it would give it hard
-                              edges. A shape that only alpha tests an unpainted alpha is not one of these (its
+                              a shape keeps its alpha whatever roofShelter says; scaling it would fade the shape
+                              itself. A shape that only alpha tests an unpainted alpha is not one of these (its
                               test threshold follows its alpha instead, see
                               ProjectedGeometry::scaledAlphaThreshold), and neither is one with the Vertex_Alpha
                               shader flag and no alpha property: the flag alone shows nothing through */
         bool neutralize {}; /**< The profile's neutralizeVertexColors: colors the shader shows become white */
-        bool shelter {}; /**< The profile's roofShelter: vertex alpha is this plugin's to write */
+        bool shelter {}; /**< The profile's roofShelter: whether cover is measured for the shape at all */
+        bool multiplyAlpha {}; /**< The profile's shelterVertMult: the shelter multiplies the mesh's vertex alpha
+                                  rather than replacing it */
     };
 
     /**
@@ -81,13 +86,14 @@ public:
     [[nodiscard]] static auto shared(const Shape& shape) -> Data*;
 
     /**
-     * @brief Builds a private variant from per vertex alpha (colors as for the shared one)
+     * @brief Builds a private variant with the shelter in its alpha (colors as for the shared one)
      *
-     * @param alpha Per vertex alpha
+     * @param values Per vertex, 0..255 for 0..1: what the mesh's alpha is multiplied by, or what
+     *        it becomes, as the shape's multiplyAlpha says
      * @return Data* As for shared(); also nullptr once K_BUDGET is spent
      */
     [[nodiscard]] static auto custom(const Shape& shape,
-                                     std::span<const std::uint8_t> alpha) -> Data*;
+                                     std::span<const std::uint8_t> values) -> Data*;
 
     /**
      * @brief Resolves renderer data to the model's original: itself, unless it is a variant
@@ -103,14 +109,17 @@ public:
     [[nodiscard]] static auto isForColorlessShape(const Data* data) -> bool;
 
     /**
-     * @brief Fingerprint of the per vertex alpha a private variant was built from; 0 for anything else
+     * @brief Fingerprint of the per vertex values a private variant was built from; 0 for anything else
      */
     [[nodiscard]] static auto fingerprintOf(const Data* data) -> std::uint64_t;
 
     /**
      * @brief Fingerprint custom() would store for these values
+     *
+     * @param multiply The shape's multiplyAlpha: the same values mean a different alpha either way
      */
-    [[nodiscard]] static auto fingerprint(std::span<const std::uint8_t> alpha) -> std::uint64_t;
+    [[nodiscard]] static auto fingerprint(std::span<const std::uint8_t> values,
+                                          bool multiply) -> std::uint64_t;
 
     /**
      * @brief One more reference on renderer data (the engine's own count)
@@ -147,8 +156,10 @@ private:
      */
     struct Recipe {
         bool whiten {}; /**< rgb = white; otherwise the mesh's */
-        bool keepAlpha {}; /**< alpha = the mesh's; otherwise 1 everywhere... */
-        std::span<const std::uint8_t> alpha; /**< ...or these, one per vertex, whatever keepAlpha says */
+        bool resetAlpha {}; /**< alpha = 1 to begin with: the mesh's was never shown (Vertex_Colors off) and may
+                               hold anything, or the profile replaces it; otherwise the mesh's own... */
+        bool multiply {}; /**< ...multiplied by the values; otherwise replaced by them */
+        std::span<const std::uint8_t> values; /**< One per vertex, 0..255 for 0..1; empty leaves the alpha as it is */
     };
 
     struct Entry {
@@ -161,10 +172,7 @@ private:
 
     struct SharedKey {
         const Data* source {};
-        bool colorsEnabled {};
-        bool keepAlpha {};
-        bool neutralize {}; /**< One model can stand under materials of two profiles */
-        bool shelter {};
+        bool resetAlpha {}; /**< One model can stand under materials of two profiles, one of each setting */
         auto operator==(const SharedKey&) const -> bool = default;
     };
 

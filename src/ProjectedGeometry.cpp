@@ -323,7 +323,8 @@ void ProjectedGeometry::dressClone(RE::NiAVObject& root,
                                                       .colorsEnabled = true,
                                                       .keepAlpha = shape->keepAlpha,
                                                       .neutralize = treatment.profile->neutralizeVertexColors,
-                                                      .shelter = treatment.profile->roofShelter};
+                                                      .shelter = treatment.profile->roofShelter,
+                                                      .multiplyAlpha = treatment.profile->shelterVertMult};
         if (auto* const variant = ProjectedVertexData::shared(description); variant != nullptr) {
             ProjectedVertexData::install(*shape->shape, variant);
         }
@@ -944,7 +945,8 @@ void ProjectedGeometry::collectReference(RE::TESObjectREFR& ref)
                        .colorsEnabled = colorsEnabled,
                        .keepAlpha = shape->keepAlpha,
                        .neutralize = treatment->profile->neutralizeVertexColors,
-                       .shelter = treatment->profile->roofShelter},
+                       .shelter = treatment->profile->roofShelter,
+                       .multiplyAlpha = treatment->profile->shelterVertMult},
              .current = shape->data,
              .projected = shape->shader->flags.any(ShaderFlag::kProjectedUV),
              .currentFingerprint = ProjectedVertexData::fingerprintOf(shape->data),
@@ -1233,7 +1235,7 @@ auto ProjectedGeometry::run(ReceiverJob& job) -> ReceiverResult
     std::vector<RE::NiPoint3> normals;
     std::vector<float> openness;
     std::vector<float> facing;
-    std::vector<std::uint8_t> alpha;
+    std::vector<std::uint8_t> values; // per vertex, what the mesh's alpha is scaled by, or becomes
     for (auto& receiver : job.receivers) {
         const Data& source = *receiver.shape.source;
         const auto layout = VertexLayout::from(source.vertexDesc);
@@ -1258,11 +1260,14 @@ auto ProjectedGeometry::run(ReceiverJob& job) -> ReceiverResult
             }
         }
 
-        // Alpha only means something relative to what the shader compares it with. A surface
-        // facing up by `facing` has just lost its snow at alpha = (threshold + K_BLEND_FLOOR) /
-        // facing, so openness 0..1 is mapped onto [that, 1]: the same openness then means the same
-        // amount of snow on a 30 degree walkway (threshold 0.93) as on a 90 degree rock (0.4),
-        // instead of the walkway going bare at the first hint of cover.
+        // The shelter's alpha value per vertex: 1 in the open and less under cover, which the
+        // mesh's alpha is multiplied by (shelterVertMult, so that a mask the mesh's author
+        // painted stays what it is and only ever loses more) or replaced by. Alpha only means
+        // something relative to what the shader compares it with: a surface facing up by
+        // `facing`, at an alpha of 1, has just lost its snow at (threshold + K_BLEND_FLOOR) /
+        // facing, so openness 0..1 is mapped onto [that, 1] - the same openness then means the
+        // same amount of snow on a 30 degree walkway (threshold 0.93) as on a 90 degree rock
+        // (0.4), instead of the walkway going bare at the first hint of cover.
         const auto goneAlpha = [&](float facing) -> float {
             return std::clamp(
                 K_NORMAL_MAP_SAFETY * (receiver.threshold + K_BLEND_FLOOR) / std::max(facing, MIN_UP), 0.0F, 1.0F);
@@ -1303,19 +1308,21 @@ auto ProjectedGeometry::run(ReceiverJob& job) -> ReceiverResult
             ProjectedVertexData::addRef(receiver.shape.source);
             wanted = receiver.shape.source;
         } else {
-            alpha.resize(vertexCount);
+            values.resize(vertexCount);
             for (std::uint32_t index = 0; index < vertexCount; ++index) {
                 const float gone = goneAlpha(facing[index]);
-                alpha[index] = static_cast<std::uint8_t>(((gone + ((1.0F - gone) * openness[index])) * FULL) + 0.5F);
+                values[index] = static_cast<std::uint8_t>(((gone + ((1.0F - gone) * openness[index])) * FULL) + 0.5F);
             }
             if (receiver.alphaTest) {
-                alphaThreshold = scaledAlphaThreshold(receiver.alphaThreshold, *std::ranges::min_element(alpha));
+                // Such a shape paints no alpha (all 1), so the lowest value is the lowest alpha it gets
+                alphaThreshold = scaledAlphaThreshold(receiver.alphaThreshold, *std::ranges::min_element(values));
             }
-            if (receiver.projected && ProjectedVertexData::fingerprint(alpha) == receiver.currentFingerprint
+            if (receiver.projected
+                && ProjectedVertexData::fingerprint(values, receiver.shape.multiplyAlpha) == receiver.currentFingerprint
                 && alphaThreshold == receiver.currentAlphaThreshold) {
                 continue; // what it already has
             }
-            wanted = ProjectedVertexData::custom(receiver.shape, alpha);
+            wanted = ProjectedVertexData::custom(receiver.shape, values);
             if (wanted == nullptr) {
                 wanted = ProjectedVertexData::shared(receiver.shape); // over budget
                 alphaThreshold = receiver.alphaThreshold;

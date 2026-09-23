@@ -13,5 +13,6 @@
     "isSnow": false,
     "neutralizeVertexColors": true,
     "roofShelter": true,
-    "shelterFade": 64
+    "shelterFade": 64,
+    "shelterVertMult": true
 }

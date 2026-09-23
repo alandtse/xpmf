@@ -157,6 +157,22 @@ public:
         return value->get<bool>();
     }
 
+    /**
+     * @brief true or false, or fallback when the key is left out or null
+     */
+    [[nodiscard]] auto booleanOr(const char* key,
+                                 bool fallback) -> bool
+    {
+        const auto* const value = find(key, false);
+        if (value == nullptr || value->is_null()) {
+            return fallback;
+        }
+        if (!value->is_boolean()) {
+            return wrong<bool>(key, "true, false, or left out");
+        }
+        return value->get<bool>();
+    }
+
     [[nodiscard]] auto number(const char* key,
                               float lowest,
                               float highest) -> float
@@ -353,6 +369,7 @@ void ConfigLoader::loadConfig()
             profile.neutralizeVertexColors = fields.boolean("neutralizeVertexColors");
             profile.roofShelter = fields.boolean("roofShelter");
             profile.shelterFade = fields.number("shelterFade", 0.0F, MAX_SHELTER_FADE);
+            profile.shelterVertMult = fields.booleanOr("shelterVertMult", DEFAULT_SHELTER_VERT_MULT);
 
             if (!accept(fields, path.filename().string())) {
                 continue;
@@ -408,6 +425,7 @@ void ConfigLoader::loadConfig()
         spdlog::info("Config Loaded: [{}] Neutralize Vertex Colors: {}", profile.name, profile.neutralizeVertexColors);
         spdlog::info("Config Loaded: [{}] Roof Shelter: {}", profile.name, profile.roofShelter);
         spdlog::info("Config Loaded: [{}] Shelter Fade: {}", profile.name, profile.shelterFade);
+        spdlog::info("Config Loaded: [{}] Shelter Vert Mult: {}", profile.name, profile.shelterVertMult);
     }
 }
 
@@ -438,6 +456,7 @@ auto ConfigLoader::builtInProfiles() -> std::vector<Profile>
     snow.neutralizeVertexColors = true;
     snow.roofShelter = true;
     snow.shelterFade = DEFAULT_SHELTER_FADE;
+    snow.shelterVertMult = DEFAULT_SHELTER_VERT_MULT;
 
     // Ash falls like snow and lies like snow, so it gets everything snow gets - except the snow
     // shading, which is sparkle and rim light
