@@ -71,12 +71,14 @@ public:
         std::string detailNormalTexture; /**< Same for the detail normal; empty = the game's ProjectedNormalDetail
                                             stays */
         std::optional<bool> isSnow; /**< The material objects' Snow flag; std::nullopt (null in the file, or the
-                                       key left out) = as the record has it */
+                                       key left out) = as the record has it. Like the textures and the three
+                                       values below, nothing without patchMaterial: the loader clears it */
 
         // The three of a material object's values the engine's single pass path reads besides the
         // color and the Snow flag (see MaterialMatcher); the projection covers a pixel where
         // dot(normal, up) * vertex alpha > cos(max angle) + (1 - cos) * (bias + scale * noise).
-        // std::nullopt (null in the file, or the key left out) = as each record has it
+        // std::nullopt (null in the file, or the key left out) = as each record has it, which is
+        // also all they can be without patchMaterial: the loader clears them
         std::optional<float> falloffScale; /**< How far the coverage noise raises what a surface has to face up by:
                                               the patches the projection is missing from. 0.25 to 0.5 on the vanilla
                                               snow materials */

@@ -467,6 +467,34 @@ void ConfigLoader::loadConfig()
                  profile.neutralizeVertexAlpha,
                  profile.neutralizeVertexAlphaSkip);
             idle("roofShelterSkip", "roofShelter", profile.roofShelter, profile.roofShelterSkip);
+
+            // The material settings only mean anything to a profile that patches its materials:
+            // without patchMaterial they are cleared, so that nothing downstream can read them
+            if (!profile.patchMaterial) {
+                std::vector<std::string> given;
+                if (profile.isSnow.has_value()) {
+                    given.emplace_back("\"isSnow\"");
+                }
+                if (profile.falloffScale.has_value()) {
+                    given.emplace_back("\"falloffScale\"");
+                }
+                if (profile.falloffBias.has_value()) {
+                    given.emplace_back("\"falloffBias\"");
+                }
+                if (profile.noiseUVScale.has_value()) {
+                    given.emplace_back("\"noiseUVScale\"");
+                }
+                if (!given.empty()) {
+                    spdlog::warn("{}: \"patchMaterial\" is off, so {} {} nothing",
+                                 path.filename().string(),
+                                 joinList(given),
+                                 given.size() == 1 ? "does" : "do");
+                }
+                profile.isSnow.reset();
+                profile.falloffScale.reset();
+                profile.falloffBias.reset();
+                profile.noiseUVScale.reset();
+            }
             s_profiles.push_back(std::move(profile));
         }
         if (s_profiles.empty()) {
