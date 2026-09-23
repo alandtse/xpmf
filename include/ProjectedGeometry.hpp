@@ -51,10 +51,15 @@ namespace XPMF {
  *    static shape an occluder (the CPU vertex and index copies the engine keeps for decals),
  *    for every snow-projected shape a receiver. Both pin what they point at. A cell is
  *    gathered once references have stopped loading into it for K_QUIET_PERIOD, and once more
- *    after K_SETTLE_RECHECK, because 3D streams in for seconds after a cell attaches.
+ *    after K_SETTLE_RECHECK, because 3D streams in for seconds after a cell attaches. Behind a
+ *    loading screen nothing is seen until it goes, so the pass hurries while one is up: shorter
+ *    waits, longer slices, the worker at normal priority - the point being that what is under a
+ *    roof is bare by the time the screen fades in, not a second after.
  *  - A below-normal-priority worker rasterizes the occluders into height layers (one per cell
  *    they reach, see ShelterMap) and, once the 3x3 cells around a receiver's cell are quiet,
- *    judges each receiver by the vertices that can hold snow (ShelterMap::judge): in the open ->
+ *    judges each receiver by the vertices that can hold snow (ShelterMap::judge). A cell's first
+ *    judgement waits for its own roofs only, its neighbors' coming in over the next seconds and a
+ *    second pass following them; every later one waits for the whole neighborhood. In the open ->
  *    keeps the shared variant, partly covered -> a private variant whose alpha fades with the
  *    distance under cover, sheltered -> its projected snow is switched off (the Projected_UV
  *    and Snow shader flags the engine set in Clone3D are cleared again) and it goes back to the
@@ -121,12 +126,17 @@ private:
     using CellKey = std::uint64_t;
 
     constexpr static std::chrono::microseconds K_SLICE_BUDGET {400}; /**< Main thread time one slice may spend
-                                                                        gathering */
+                                                                        gathering... */
+    constexpr static std::chrono::milliseconds K_LOADING_SLICE_BUDGET {4}; /**< ...behind a loading screen */
     constexpr static std::chrono::milliseconds K_SLICE_SPACING {4}; /**< Pause between slices while there is work,
                                                                        so two never share a frame's task drain */
     constexpr static std::chrono::milliseconds K_IDLE_TICK {250}; /**< Slice interval with nothing to do */
     constexpr static std::chrono::milliseconds K_QUIET_PERIOD {300}; /**< No new 3D for this long before a gather */
     constexpr static std::chrono::seconds K_MAX_DIRTY_WAIT {3}; /**< ...but never wait longer than this */
+    constexpr static std::chrono::milliseconds K_LOADING_QUIET_PERIOD {100}; /**< The same two behind a loading
+                                                                                screen, where 3D streams in
+                                                                                without pause and nothing shows */
+    constexpr static std::chrono::milliseconds K_LOADING_DIRTY_WAIT {500};
     constexpr static std::chrono::seconds K_SETTLE_RECHECK {5}; /**< One more gather this long after the first */
     constexpr static std::chrono::seconds K_RECEIVER_TIMEOUT {6}; /**< Receivers stop waiting for busy neighbors */
     constexpr static std::chrono::seconds K_GRID_RESCAN {1}; /**< Loaded grid poll when no event asked for one */
@@ -276,6 +286,8 @@ private:
         std::uint64_t epoch {}; /**< Bumped by every gather; older results are dropped */
         bool rasterInFlight {};
         bool receiversInFlight {};
+        bool everJudged {}; /**< Whether its receivers were ever computed; the first time does not wait for the
+                               neighbors' roofs, see scheduleReceivers */
         std::vector<Receiver> receivers; /**< From the latest gather, unless in flight */
         Clock::time_point receiversSince; /**< When they were gathered, for K_RECEIVER_TIMEOUT */
         std::unordered_map<CellKey, std::shared_ptr<const ShelterMap::Heights>> layers; /**< By source cell */
@@ -494,6 +506,8 @@ private:
     static inline bool s_workerStarted = false;
 
     static inline std::atomic<bool> s_gridChanged {true}; /**< Set by the sink */
+    static inline std::atomic<bool> s_loading {false}; /**< Whether a loading screen is up (read in slice): the
+                                                          pass hurries while it is */
     static inline std::atomic<bool> s_slicePending {false};
     static inline std::atomic<bool> s_sliceQueued {false};
     static inline std::atomic<Clock::rep> s_lastSliceEnd {0};

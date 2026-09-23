@@ -511,6 +511,12 @@ void ProjectedGeometry::slice()
 {
     const auto now = Clock::now();
 
+    // Behind a loading screen nothing is seen until it goes: the pass hurries while one is up, so
+    // that what is under a roof is bare by the time the screen fades in
+    auto* const ui = RE::UI::GetSingleton();
+    const bool loading = ui != nullptr && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
+    s_loading.store(loading, std::memory_order_release);
+
     drainResults();
     for (std::size_t count = 0; count < K_APPLY_BATCH && !s_swaps.empty(); ++count) {
         Swap swap = std::move(s_swaps.front());
@@ -535,7 +541,8 @@ void ProjectedGeometry::slice()
         s_nextGridScan = now + K_GRID_RESCAN;
     }
 
-    const auto deadline = now + K_SLICE_BUDGET;
+    const auto deadline
+        = now + (loading ? std::chrono::duration_cast<Clock::duration>(K_LOADING_SLICE_BUDGET) : K_SLICE_BUDGET);
     if (s_gather.has_value() || startGather(now)) {
         if (advanceGather(deadline)) {
             finishGather(Clock::now());
@@ -748,6 +755,14 @@ auto ProjectedGeometry::startGather(Clock::time_point now) -> bool
         playerY = ShelterMap::cellOf(position.y);
     }
 
+    // Behind a loading screen 3D streams in without pause, and nothing shows: a cell is gathered
+    // sooner, and gathered again as more of it arrives
+    const bool loading = s_loading.load(std::memory_order_acquire);
+    const auto quietPeriod
+        = std::chrono::duration_cast<Clock::duration>(loading ? K_LOADING_QUIET_PERIOD : K_QUIET_PERIOD);
+    const auto maxDirtyWait = std::chrono::duration_cast<Clock::duration>(
+        loading ? K_LOADING_DIRTY_WAIT : std::chrono::duration_cast<std::chrono::milliseconds>(K_MAX_DIRTY_WAIT));
+
     Cell* best = nullptr;
     CellKey bestKey = 0;
     int bestDistance = 0;
@@ -759,7 +774,7 @@ auto ProjectedGeometry::startGather(Clock::time_point now) -> bool
             cell.recheckAt.reset();
             markDirty(cell, now - K_QUIET_PERIOD);
         }
-        if (!cell.dirty || (now - cell.lastDirtyAt < K_QUIET_PERIOD && now - cell.firstDirtyAt < K_MAX_DIRTY_WAIT)) {
+        if (!cell.dirty || (now - cell.lastDirtyAt < quietPeriod && now - cell.firstDirtyAt < maxDirtyWait)) {
             continue;
         }
         const int distance = std::max(std::abs(cell.cellX - playerX), std::abs(cell.cellY - playerY));
@@ -1046,8 +1061,14 @@ void ProjectedGeometry::scheduleReceivers(Clock::time_point now)
             continue;
         }
         // Colors computed against half a neighborhood are computed twice; only a neighborhood
-        // that never settles is not waited for
-        if (neighborhoodBusy(cell) && now - cell.receiversSince < K_RECEIVER_TIMEOUT) {
+        // that never settles is not waited for. The exception is a cell's very first judgement:
+        // it waits for the cell's own roofs alone, so that a floor under its own building is
+        // bare within a moment of loading, and the neighbors' roofs - which take seconds more to
+        // arrive, one gather at a time - are caught by the second pass their maps set off
+        if (cell.rasterInFlight) {
+            continue;
+        }
+        if (cell.everJudged && neighborhoodBusy(cell) && now - cell.receiversSince < K_RECEIVER_TIMEOUT) {
             continue;
         }
 
@@ -1068,6 +1089,7 @@ void ProjectedGeometry::scheduleReceivers(Clock::time_point now)
         job.receivers = std::move(cell.receivers);
         cell.receivers.clear();
         cell.receiversInFlight = true;
+        cell.everJudged = true;
         cell.computedAgainst = stamp;
         submit(std::move(job));
     }
@@ -1118,10 +1140,16 @@ void ProjectedGeometry::pumpSlice()
 void ProjectedGeometry::workerLoop()
 {
     // Nothing here is latency critical - the clone pass already gave snow its color - while the
-    // game's own threads are
+    // game's own threads are. Behind a loading screen it is the other way around: the work has
+    // to be done by the time the screen fades in, and the game is waiting on its disk
     ::SetThreadPriority(::GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    bool hurried = false;
 
     for (;;) {
+        if (const bool loading = s_loading.load(std::memory_order_acquire); loading != hurried) {
+            ::SetThreadPriority(::GetCurrentThread(), loading ? THREAD_PRIORITY_NORMAL : THREAD_PRIORITY_BELOW_NORMAL);
+            hurried = loading;
+        }
         std::optional<Job> job;
         {
             std::unique_lock<std::mutex> lock(s_queueMutex);

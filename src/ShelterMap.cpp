@@ -179,6 +179,44 @@ auto ShelterMap::Field::isCovered(const RE::NiPoint3& point,
     return false;
 }
 
+namespace {
+
+/**
+ * @brief Calls visit(nodeX, nodeY) for every node at Chebyshev distance `ring` from a node: the
+ * whole perimeter of the square, each node once
+ */
+template <typename Visit>
+void forEachOnRing(int centerX,
+                   int centerY,
+                   int ring,
+                   const Visit& visit)
+{
+    if (ring == 0) {
+        visit(centerX, centerY);
+        return;
+    }
+    for (int offset = -ring; offset <= ring; ++offset) {
+        visit(centerX + offset, centerY - ring);
+        visit(centerX + offset, centerY + ring);
+    }
+    for (int offset = -ring + 1; offset <= ring - 1; ++offset) {
+        visit(centerX - ring, centerY + offset);
+        visit(centerX + ring, centerY + offset);
+    }
+}
+
+/**
+ * @brief The least distance a point within half a spacing of a node can have to any node of the
+ * ring at Chebyshev distance `ring` around it
+ */
+auto leastRingDistance(int ring) -> float
+{
+    constexpr float HALF = 0.5F;
+    return (static_cast<float>(ring) - HALF) * ShelterMap::K_SPACING;
+}
+
+} // namespace
+
 auto ShelterMap::Field::depthUnderCover(const RE::NiPoint3& point,
                                         const Slope& slope,
                                         float reach) const -> float
@@ -190,22 +228,26 @@ auto ShelterMap::Field::depthUnderCover(const RE::NiPoint3& point,
     const int nodeY = nearestNodeOf(point.y);
 
     // Distance to the nearest column that is open at this height - the drip line, from inside.
-    // The window is centered on the nearest node, up to half a spacing from the point, hence the
-    // half spacing more of radius
+    // Ring by ring out from the nearest node, which is up to half a spacing from the point (hence
+    // the half spacing more of radius): once no node of the next ring can be nearer than the best
+    // column found, the rest cannot either, which next to a drip line - where most of the asking
+    // happens - ends the search after a ring or two
     constexpr float HALF_SPACING = K_SPACING * 0.5F;
     const int radius = static_cast<int>(std::ceil((reach + HALF_SPACING) / K_SPACING));
     float nearestSq = reach * reach;
-    for (int offsetY = -radius; offsetY <= radius; ++offsetY) {
-        for (int offsetX = -radius; offsetX <= radius; ++offsetX) {
-            const int columnX = nodeX + offsetX;
-            const int columnY = nodeY + offsetY;
+    for (int ring = 0; ring <= radius; ++ring) {
+        const float least = leastRingDistance(ring);
+        if (ring > 0 && least * least >= nearestSq) {
+            break;
+        }
+        forEachOnRing(nodeX, nodeY, ring, [&](int columnX, int columnY) -> void {
             if (topAt(columnX, columnY) > ceilingAt(point, slope, columnX, columnY)) {
-                continue;
+                return;
             }
             const float deltaX = (static_cast<float>(columnX) * K_SPACING) - point.x;
             const float deltaY = (static_cast<float>(columnY) * K_SPACING) - point.y;
             nearestSq = std::min(nearestSq, (deltaX * deltaX) + (deltaY * deltaY));
-        }
+        });
     }
     // The drip line runs somewhere between that open column and the covered one before it; half a
     // spacing is the unbiased guess (measuring to the node itself reads 0 to K_SPACING too deep)
@@ -221,17 +263,19 @@ auto ShelterMap::Field::distanceToCover(const RE::NiPoint3& point,
     constexpr float HALF_SPACING = K_SPACING * 0.5F;
     const int radius = static_cast<int>(std::ceil((reach + HALF_SPACING) / K_SPACING));
     float nearestSq = std::numeric_limits<float>::max();
-    for (int offsetY = -radius; offsetY <= radius; ++offsetY) {
-        for (int offsetX = -radius; offsetX <= radius; ++offsetX) {
-            const int columnX = nodeX + offsetX;
-            const int columnY = nodeY + offsetY;
+    for (int ring = 0; ring <= radius; ++ring) { // ring by ring, as depthUnderCover does
+        const float least = leastRingDistance(ring);
+        if (ring > 0 && least * least >= nearestSq) {
+            break;
+        }
+        forEachOnRing(nodeX, nodeY, ring, [&](int columnX, int columnY) -> void {
             if (topAt(columnX, columnY) <= ceilingAt(point, slope, columnX, columnY)) {
-                continue;
+                return;
             }
             const float deltaX = (static_cast<float>(columnX) * K_SPACING) - point.x;
             const float deltaY = (static_cast<float>(columnY) * K_SPACING) - point.y;
             nearestSq = std::min(nearestSq, (deltaX * deltaX) + (deltaY * deltaY));
-        }
+        });
     }
     if (nearestSq == std::numeric_limits<float>::max()) {
         return reach + K_SPACING; // nothing covered within the window: well clear of any cover
